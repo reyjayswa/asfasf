@@ -37,8 +37,12 @@ HTML report, and a local web dashboard.
 | **Recon & discovery** | passive | BFS crawl with depth/page limits, link + form parameter discovery, tech fingerprinting | always |
 | **CVE fingerprint** | passive | Maps detected software + versions to a built-in table of known CVEs; sends no extra requests | `cve_fingerprint` |
 | **Reflected XSS** | active | Uniquely-tagged HTML breakout markers, multiple contexts in aggressive mode | `xss` |
-| **SQL injection** | active | Error-based, boolean-based, and opt-in bounded time-based blind | `sqli` (+ `sqli_time_based`) |
+| **SQL injection** | active | Error-based, boolean-based, and bounded time-based blind | `sqli`, `sqli_time_based` |
 | **SQL dumper** | exploit | Bounded proof-of-impact extraction on **firmly-confirmed** SQLi: version, user, database, table/column enumeration, and an optional tiny row sample | `sql_dump` |
+
+All of the above are **on by default** (a minimal config with no `checks` block
+runs every check). The one thing that stays off unless you ask for it is the
+dumper's `dump.sample_data`, which reads actual row values.
 | **Config exposure** | active | `.env`, `.git/config`, source/config backups, `phpinfo`, SQL dumps — matched by file-specific signatures | `config_exposure` |
 | **Admin panel finder** | active | Common admin/login panels, gated on password fields, panel signatures, or auth challenges | `admin_panel` |
 | **CMS fingerprint** | active | WordPress / Joomla / Drupal / Magento, with version where available | `cms_fingerprint` |
@@ -94,9 +98,11 @@ Requires Go 1.24+.
 
 **Only `in_scope` and `seeds` are required.** Everything else has safe
 defaults, and if you leave out the `checks` block a useful set of checks turns
-on automatically (the SQL dumper and the time-based probe stay off until you
-enable them). You do **not** need a proxy: if a target rate-limits you (HTTP
-429), lower `http.rate_per_second` rather than adding one.
+on automatically, including the time-based blind SQLi probe and the SQL dumper.
+The only thing that stays off by default is the dumper reading actual row
+values (`dump.sample_data`); it still proves impact via metadata and schema.
+You do **not** need a proxy: if a target rate-limits you (HTTP 429), lower
+`http.rate_per_second` rather than adding one.
 
 ## Configuration
 
@@ -128,7 +134,7 @@ http:
 checks:
   xss: true
   sqli: true
-  sqli_time_based: false   # opt-in bounded blind probe
+  sqli_time_based: true    # bounded blind probe (on by default)
   sqli_delay_seconds: 3    # clamped to 1..10
 
   config_exposure: true    # .env, .git/config, backups, phpinfo
@@ -137,13 +143,13 @@ checks:
   shell_exposure: true     # already-exposed web shell (compromise)
   subdomain_takeover: true # dangling DNS -> unclaimed service
   cve_fingerprint: true    # version -> known CVEs (no extra requests)
-  sql_dump: false          # bounded extraction on confirmed SQLi (opt-in)
+  sql_dump: true           # bounded extraction on confirmed SQLi (on by default)
 
 dump:                      # only used when sql_dump is true
   max_tables: 20
   max_columns: 20
   max_rows: 5
-  sample_data: false       # true reads at most max_rows rows (bounded)
+  sample_data: false       # reads actual rows only if true (bounded); off by default
 
 takeover:
   extra_subdomains: []     # extra in-scope hosts to check for takeover

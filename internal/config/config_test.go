@@ -29,23 +29,23 @@ seeds: ["https://example.com/"]
 	for name, on := range map[string]bool{
 		"xss":                cfg.Check.XSS,
 		"sqli":               cfg.Check.SQLi,
+		"sqli_time_based":    cfg.Check.SQLiTimeBased,
 		"config_exposure":    cfg.Check.ConfigExposure,
 		"admin_panel":        cfg.Check.AdminPanel,
 		"cms_fingerprint":    cfg.Check.CMSFingerprint,
 		"shell_exposure":     cfg.Check.ShellExposure,
 		"subdomain_takeover": cfg.Check.SubdomainTakeover,
 		"cve_fingerprint":    cfg.Check.CVEFingerprint,
+		"sql_dump":           cfg.Check.SQLDump,
 	} {
 		if !on {
 			t.Errorf("expected %s to default ON in a minimal config", name)
 		}
 	}
-	// Higher-risk opt-ins must stay off unless explicitly enabled.
-	if cfg.Check.SQLDump {
-		t.Error("sql_dump must not be enabled by default")
-	}
-	if cfg.Check.SQLiTimeBased {
-		t.Error("sqli_time_based must not be enabled by default")
+	// Row-data sampling is the one thing that must NOT default on: the dumper
+	// extracts metadata/schema by default, but reading real rows is opt-in.
+	if cfg.Dump.SampleData {
+		t.Error("dump.sample_data must not be enabled by default")
 	}
 }
 

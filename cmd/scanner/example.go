@@ -70,10 +70,10 @@ checks:
   # Parameter injection checks (run per discovered parameter).
   xss: true
   sqli: true
-  # Blind time-based SQLi. Off by default. Sends ONE short, bounded delay
-  # payload per parameter and confirms against a zero-delay control. It is a
-  # detection probe, not a load or denial-of-service test.
-  sqli_time_based: false
+  # Blind time-based SQLi. Sends ONE short, bounded delay payload per parameter
+  # and confirms against a zero-delay control. It is a detection probe, not a
+  # load or denial-of-service test. Set to false if a program forbids it.
+  sqli_time_based: true
   sqli_delay_seconds: 3    # clamped to 1..10
 
   # Site checks (run once per in-scope origin). These send path-probing
@@ -89,15 +89,18 @@ checks:
   cve_fingerprint: true
 
   # Bounded SQL data extraction against endpoints with FIRMLY-confirmed SQLi.
-  # Off by default. Extracts metadata only unless dump.sample_data is true.
-  # Follow the program's data-minimization rules before enabling.
-  sql_dump: false
+  # Extracts metadata and schema (table/column names) only, unless
+  # dump.sample_data is turned on below. Set to false if a program forbids it.
+  sql_dump: true
 
 dump:
   max_tables: 20
   max_columns: 20
   max_rows: 5
-  sample_data: false       # when true, reads at most max_rows rows (bounded)
+  # Reading ACTUAL ROW VALUES stays opt-in for data minimization. Leave false
+  # to prove impact via metadata/schema only; set true to read at most
+  # max_rows rows per sampled table.
+  sample_data: false
 
 takeover:
   extra_subdomains: []     # optional extra in-scope hosts to check for takeover

@@ -198,22 +198,28 @@ func (c *Config) anyCheckEnabled() bool {
 		ch.CVEFingerprint || ch.SQLDump
 }
 
-// applyCheckDefaults turns on a sensible beginner set when no checks were
-// enabled, so a minimal config (just scope + seeds) still scans for something
-// useful. The higher-risk opt-ins — the SQL data dumper and the time-based
-// blind probe — stay off and must be enabled deliberately.
+// applyCheckDefaults turns on the full check set when no checks were enabled,
+// so a minimal config (just scope + seeds) runs everything. This includes the
+// time-based blind SQLi probe and the SQL dumper.
+//
+// One deliberate exception: the dumper's row-data sampling (Dump.SampleData)
+// is NOT turned on here. The dumper still proves impact by extracting metadata
+// and schema (table/column names), but reading actual row values stays an
+// explicit opt-in so a default scan respects data-minimization rules.
 func (c *Config) applyCheckDefaults() {
 	if c.anyCheckEnabled() {
 		return
 	}
 	c.Check.XSS = true
 	c.Check.SQLi = true
+	c.Check.SQLiTimeBased = true
 	c.Check.ConfigExposure = true
 	c.Check.AdminPanel = true
 	c.Check.CMSFingerprint = true
 	c.Check.ShellExposure = true
 	c.Check.SubdomainTakeover = true
 	c.Check.CVEFingerprint = true
+	c.Check.SQLDump = true
 }
 
 // validate enforces the scope guardrails and basic sanity limits.
