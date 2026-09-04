@@ -79,8 +79,9 @@ Requires Go 1.24+.
 ## Quick start
 
 ```sh
-# 1. Generate a config and edit the scope + seeds
-./scanner init -o scope.yaml
+# 1. Generate a short starter config (only scope + seeds to fill in)
+./scanner init -minimal -o scope.yaml
+#    ...or the fully-documented one:  ./scanner init -o scope.yaml
 
 # 2. Run a scan and write reports
 ./scanner scan -config scope.yaml -json report.json -html report.html
@@ -88,6 +89,12 @@ Requires Go 1.24+.
 # 3. Or browse results in a local dashboard
 ./scanner serve -config scope.yaml -addr 127.0.0.1:8080
 ```
+
+**Only `in_scope` and `seeds` are required.** Everything else has safe
+defaults, and if you leave out the `checks` block a useful set of checks turns
+on automatically (the SQL dumper and the time-based probe stay off until you
+enable them). You do **not** need a proxy: if a target rate-limits you (HTTP
+429), lower `http.rate_per_second` rather than adding one.
 
 ## Configuration
 
@@ -149,7 +156,7 @@ start. The `mode` in the file can be overridden per run with `-mode`.
 |---------|---------|
 | `scan`  | Run a scan; write `-json` / `-html` reports; print a summary. |
 | `serve` | Run a scan and serve an HTML dashboard on `-addr` (localhost by default), with a re-scan button and a `/report.json` endpoint. |
-| `init`  | Write a documented example config. |
+| `init`  | Write a config. `-minimal` writes a short starter (scope + seeds only); otherwise a fully-documented one. |
 
 Common flags: `-config <file>` (required for scan/serve), `-mode`, `-quiet`.
 

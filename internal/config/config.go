@@ -186,6 +186,34 @@ func (c *Config) applyDefaults() {
 	if c.Dump.MaxRows <= 0 {
 		c.Dump.MaxRows = 5
 	}
+	c.applyCheckDefaults()
+}
+
+// anyCheckEnabled reports whether the user turned on at least one detection
+// module. The delay/sample modifiers do not count on their own.
+func (c *Config) anyCheckEnabled() bool {
+	ch := c.Check
+	return ch.XSS || ch.SQLi || ch.AdminPanel || ch.ConfigExposure ||
+		ch.ShellExposure || ch.CMSFingerprint || ch.SubdomainTakeover ||
+		ch.CVEFingerprint || ch.SQLDump
+}
+
+// applyCheckDefaults turns on a sensible beginner set when no checks were
+// enabled, so a minimal config (just scope + seeds) still scans for something
+// useful. The higher-risk opt-ins — the SQL data dumper and the time-based
+// blind probe — stay off and must be enabled deliberately.
+func (c *Config) applyCheckDefaults() {
+	if c.anyCheckEnabled() {
+		return
+	}
+	c.Check.XSS = true
+	c.Check.SQLi = true
+	c.Check.ConfigExposure = true
+	c.Check.AdminPanel = true
+	c.Check.CMSFingerprint = true
+	c.Check.ShellExposure = true
+	c.Check.SubdomainTakeover = true
+	c.Check.CVEFingerprint = true
 }
 
 // validate enforces the scope guardrails and basic sanity limits.

@@ -3,6 +3,10 @@
 # SCOPE IS MANDATORY. The scanner will not send a request to any host that is
 # not matched by scope.in_scope, and out_of_scope always wins. Only list
 # assets you own or are explicitly authorized to test.
+#
+# NEW HERE? You only need to fill in "in_scope" and "seeds" below. Every other
+# setting has a safe default, and if you delete the whole "checks" block a
+# useful set of checks turns on automatically.
 
 # Scan intensity:
 #   passive    - crawl, discover, fingerprint, and CVE-map only; never sends

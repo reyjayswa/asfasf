@@ -1,5 +1,27 @@
 package main
 
+// minimalConfig is written by "scanner init -minimal". It contains only the
+// two things a beginner must set. Everything else uses safe defaults, and a
+// useful set of checks turns on automatically.
+const minimalConfig = `# asfasf-scanner — minimal config
+#
+# Only these two things are required:
+#   in_scope : the hosts you are ALLOWED to test
+#   seeds    : where to start scanning
+# Everything else has safe defaults, and a useful set of checks turns on
+# automatically. Only scan targets you own or are permitted to test.
+
+mode: safe                 # passive | safe | aggressive
+
+scope:
+  in_scope:
+    - "example.com"        # exact host you may test
+    - "*.example.com"      # ...and any of its subdomains (optional)
+
+seeds:
+  - "https://example.com/" # the page to start from
+`
+
 // exampleConfig is written by "scanner init". It documents every option and
 // ships conservative defaults with a clearly-fake scope the user must edit.
 const exampleConfig = `# asfasf-scanner configuration
@@ -7,6 +29,10 @@ const exampleConfig = `# asfasf-scanner configuration
 # SCOPE IS MANDATORY. The scanner will not send a request to any host that is
 # not matched by scope.in_scope, and out_of_scope always wins. Only list
 # assets you own or are explicitly authorized to test.
+#
+# NEW HERE? You only need to fill in "in_scope" and "seeds" below. Every other
+# setting has a safe default, and if you delete the whole "checks" block a
+# useful set of checks turns on automatically.
 
 # Scan intensity:
 #   passive    - crawl, discover, fingerprint, and CVE-map only; never sends

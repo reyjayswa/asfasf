@@ -179,17 +179,24 @@ func runServe(args []string) {
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	out := fs.String("o", "scope.yaml", "output path for the example config")
+	out := fs.String("o", "scope.yaml", "output path for the config")
+	minimal := fs.Bool("minimal", false, "write a short starter config (just scope + seeds)")
 	fs.Parse(args)
 
 	if _, err := os.Stat(*out); err == nil {
 		fatal(fmt.Errorf("%s already exists; refusing to overwrite", *out))
 	}
-	if err := os.WriteFile(*out, []byte(exampleConfig), 0o644); err != nil {
+	body := exampleConfig
+	if *minimal {
+		body = minimalConfig
+	}
+	if err := os.WriteFile(*out, []byte(body), 0o644); err != nil {
 		fatal(err)
 	}
-	fmt.Printf("Wrote example config to %s\n", *out)
-	fmt.Println("Edit scope.in_scope and seeds before running a scan.")
+	fmt.Printf("Wrote config to %s\n", *out)
+	fmt.Println("Edit in_scope and seeds, then run: scanner scan -config " + *out + " -html report.html")
+	fmt.Println("Only in_scope and seeds are required — everything else has safe defaults,")
+	fmt.Println("and a useful set of checks turns on automatically.")
 }
 
 func printSummary(rep *engine.Report) {
