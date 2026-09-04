@@ -79,7 +79,8 @@ Requires Go 1.24+.
 ## Quick start
 
 ```sh
-# 1. Build your config by answering a few questions
+# 1. Build your config by answering a few questions (and optionally scan
+#    right away — zero to a report in one command)
 ./scanner init -interactive -o scope.yaml
 #    ...or a short starter to edit:  ./scanner init -minimal -o scope.yaml
 #    ...or the fully-documented one: ./scanner init -o scope.yaml
@@ -157,7 +158,7 @@ start. The `mode` in the file can be overridden per run with `-mode`.
 |---------|---------|
 | `scan`  | Run a scan; write `-json` / `-html` reports; print a summary. |
 | `serve` | Run a scan and serve an HTML dashboard on `-addr` (localhost by default), with a re-scan button and a `/report.json` endpoint. |
-| `init`  | Write a config. `-interactive` (or `-i`) asks a few questions and builds it for you; `-minimal` writes a short starter (scope + seeds only); otherwise a fully-documented one. |
+| `init`  | Write a config. `-interactive` (or `-i`) asks a few questions, builds it for you, and offers to run the scan immediately; `-minimal` writes a short starter (scope + seeds only); otherwise a fully-documented one. |
 
 Common flags: `-config <file>` (required for scan/serve), `-mode`, `-quiet`.
 

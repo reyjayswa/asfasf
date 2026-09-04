@@ -121,7 +121,13 @@ func runScan(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	eng, err := engine.New(cfg, newLogger(*quiet))
+	executeScan(cfg, *jsonOut, *htmlOut, *quiet)
+}
+
+// executeScan builds the engine, runs the scan, prints the summary, and writes
+// any requested reports. Shared by the scan command and the interactive init.
+func executeScan(cfg *config.Config, jsonOut, htmlOut string, quiet bool) {
+	eng, err := engine.New(cfg, newLogger(quiet))
 	if err != nil {
 		fatal(err)
 	}
@@ -131,17 +137,17 @@ func runScan(args []string) {
 	rep := eng.Run(ctx)
 	printSummary(rep)
 
-	if *jsonOut != "" {
-		if err := report.WriteJSON(rep, *jsonOut); err != nil {
+	if jsonOut != "" {
+		if err := report.WriteJSON(rep, jsonOut); err != nil {
 			fatal(err)
 		}
-		fmt.Fprintf(os.Stderr, "[*] JSON report written to %s\n", *jsonOut)
+		fmt.Fprintf(os.Stderr, "[*] JSON report written to %s\n", jsonOut)
 	}
-	if *htmlOut != "" {
-		if err := report.WriteHTML(rep, *htmlOut); err != nil {
+	if htmlOut != "" {
+		if err := report.WriteHTML(rep, htmlOut); err != nil {
 			fatal(err)
 		}
-		fmt.Fprintf(os.Stderr, "[*] HTML report written to %s\n", *htmlOut)
+		fmt.Fprintf(os.Stderr, "[*] HTML report written to %s\n", htmlOut)
 	}
 }
 
@@ -192,11 +198,27 @@ func runInit(args []string) {
 	}
 
 	if *interactive {
-		body, ok := interactiveConfig(os.Stdin, os.Stdout)
+		body, runNow, reportPath, ok := interactiveConfig(os.Stdin, os.Stdout)
 		if !ok {
 			return // the guide already explained why it stopped
 		}
-		writeConfig(*out, body)
+		if err := os.WriteFile(*out, []byte(body), 0o644); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("\nWrote config to %s\n", *out)
+		if runNow {
+			cfg, err := config.Load(*out)
+			if err != nil {
+				fatal(err)
+			}
+			fmt.Println("Running a scan now…")
+			executeScan(cfg, "", reportPath, false)
+			fmt.Printf("\nDone. Open %s in your browser to view the results.\n", reportPath)
+			fmt.Println("Run it again any time: scanner scan -config " + *out + " -html " + reportPath)
+		} else {
+			fmt.Println("Next: scanner scan -config " + *out + " -html report.html")
+			fmt.Println("Only in_scope and seeds are required; a useful set of checks turns on automatically.")
+		}
 		return
 	}
 
@@ -219,9 +241,10 @@ func writeConfig(out, body string) {
 }
 
 // interactiveConfig walks the user through a few questions and returns the
-// generated config body. It returns ok=false (without writing anything) if the
-// user cannot confirm they are authorized to test the target, or aborts.
-func interactiveConfig(in io.Reader, outw io.Writer) (string, bool) {
+// generated config body, whether to scan immediately, and where to save the
+// report. It returns ok=false (without writing anything) if the user cannot
+// confirm they are authorized to test the target, or aborts.
+func interactiveConfig(in io.Reader, outw io.Writer) (body string, runNow bool, reportPath string, ok bool) {
 	r := bufio.NewReader(in)
 	fmt.Fprintln(outw, "Let's set up a scan. Answers in [brackets] are the defaults — press Enter to accept.")
 	fmt.Fprintln(outw)
@@ -239,7 +262,7 @@ func interactiveConfig(in io.Reader, outw io.Writer) (string, bool) {
 	if !askYesNo(r, outw, "Do you have explicit permission to test "+host+"?", false) {
 		fmt.Fprintln(outw, "\nStopping. Only scan hosts you own or are authorized to test (for example,")
 		fmt.Fprintln(outw, "a bug bounty program's in-scope assets). Nothing was written.")
-		return "", false
+		return "", false, "", false
 	}
 
 	// 3. Subdomains.
@@ -290,7 +313,14 @@ func interactiveConfig(in io.Reader, outw io.Writer) (string, bool) {
 	fmt.Fprintf(outw, "  Mode:     %s\n", mode)
 	fmt.Fprintf(outw, "  In scope: %s\n", strings.Join(scope, ", "))
 	fmt.Fprintf(outw, "  Start at: %s\n", seed)
-	return b.String(), true
+
+	// 7. Offer to scan immediately.
+	runNow = askYesNo(r, outw, "Run a scan now?", true)
+	reportPath = "report.html"
+	if runNow {
+		reportPath = ask(r, outw, "Save the HTML report to?", "report.html")
+	}
+	return b.String(), runNow, reportPath, true
 }
 
 // ask prints a prompt (with an optional default) and returns the trimmed line.
