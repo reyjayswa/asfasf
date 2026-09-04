@@ -132,6 +132,16 @@ Requires Go 1.24+.
 
 ## Quick start
 
+The simplest possible run is just a URL — no config file at all. The scope is
+derived from the URL's host (only that host, unless you add `-subdomains`):
+
+```sh
+./scanner scan https://example.com/
+./scanner scan -url example.com -subdomains        # include all subdomains
+```
+
+For repeatable scans with tuned settings, use a config file:
+
 ```sh
 # 1. Build your config by answering a few questions (and optionally scan
 #    right away — zero to a report in one command)
@@ -226,7 +236,7 @@ start. The `mode` in the file can be overridden per run with `-mode`.
 
 | Command | Purpose |
 |---------|---------|
-| `scan`  | Run a scan; write `-json` / `-html` / `-sarif` / `-md` reports; `-headless` (browser) and `-oob` (blind SSRF) enable extra stages; `-baseline` shows only new findings. |
+| `scan`  | Run a scan against a `-url`/positional URL (scope derived from the host; `-subdomains` widens it) or a `-config` file. Writes `-json` / `-html` / `-sarif` / `-md` reports; `-headless` (browser) and `-oob` (blind SSRF) enable extra stages; `-baseline` shows only new findings. |
 | `serve` | Run a scan and serve an HTML dashboard on `-addr` (localhost by default), with a re-scan button and a `/report.json` endpoint. |
 | `init`  | Write a config. `-interactive` (or `-i`) asks a few questions, builds it for you, and offers to run the scan immediately; `-minimal` writes a short starter (scope + seeds only); otherwise a fully-documented one. |
 

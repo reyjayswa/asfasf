@@ -56,11 +56,18 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `%s
 
 Usage:
-  scanner scan  -config <file> [-json out] [-html out] [-sarif out] [-md out]
+  scanner scan  <url>                          # simplest: just a URL
+  scanner scan  -url <url> [-subdomains]
+  scanner scan  -config <file>
+                [-json out] [-html out] [-sarif out] [-md out]
                 [-mode passive|safe|aggressive] [-headless] [-oob]
                 [-baseline prev.json] [-quiet]
   scanner serve -config <file> [-addr 127.0.0.1:8080] [-mode ...] [-no-scan]
   scanner init  [-o scope.yaml] [-interactive] [-minimal]
+
+Examples:
+  scanner scan https://example.com/            # scan one site, no config
+  scanner scan -url example.com -subdomains    # include all subdomains
 
 Run "scanner <command> -h" for command flags.
 `, banner)
@@ -106,8 +113,19 @@ func signalContext() (context.Context, context.CancelFunc) {
 }
 
 func runScan(args []string) {
+	// Accept a leading positional URL (`scanner scan https://x -html out`).
+	// Go's flag package stops at the first non-flag argument, so pull it off
+	// the front before parsing the remaining flags.
+	var posURL string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		posURL = args[0]
+		args = args[1:]
+	}
+
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	cfgPath := fs.String("config", "", "path to scope config YAML (required)")
+	url := fs.String("url", "", "scan a single URL directly — no config file needed")
+	subdomains := fs.Bool("subdomains", false, "with -url: also include *.host (all subdomains) in scope")
+	cfgPath := fs.String("config", "", "path to scope config YAML (alternative to -url)")
 	jsonOut := fs.String("json", "", "write JSON report to this path")
 	htmlOut := fs.String("html", "", "write HTML report to this path")
 	sarifOut := fs.String("sarif", "", "write SARIF 2.1.0 report to this path (for CI)")
@@ -119,12 +137,25 @@ func runScan(args []string) {
 	quiet := fs.Bool("quiet", false, "suppress progress output")
 	fs.Parse(args)
 
-	if *cfgPath == "" {
-		fmt.Fprintln(os.Stderr, "error: -config is required")
+	if *url == "" && posURL != "" {
+		*url = posURL
+	}
+
+	var cfg *config.Config
+	var err error
+	switch {
+	case *url != "":
+		cfg, err = config.FromURL(*url, *subdomains, *mode)
+		if err == nil && !*quiet {
+			fmt.Fprintf(os.Stderr, "[*] scanning %s (scope: %s)\n", *url, strings.Join(cfg.Scope.InScope, ", "))
+		}
+	case *cfgPath != "":
+		cfg, err = loadConfig(*cfgPath, *mode)
+	default:
+		fmt.Fprintln(os.Stderr, "error: provide a target — either -url <url> (or a URL argument) or -config <file>")
 		fs.Usage()
 		os.Exit(2)
 	}
-	cfg, err := loadConfig(*cfgPath, *mode)
 	if err != nil {
 		fatal(err)
 	}

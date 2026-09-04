@@ -206,6 +206,46 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
+// FromURL builds a config for scanning a single target URL, with no config
+// file. Scope is derived from the URL's host (only that host, unless
+// includeSubdomains adds its "*." wildcard) and the URL becomes the sole seed,
+// so the scan can never wander beyond the site you named. mode defaults to
+// "safe" when empty.
+func FromURL(rawURL string, includeSubdomains bool, mode string) (*Config, error) {
+	raw := strings.TrimSpace(rawURL)
+	if raw == "" {
+		return nil, fmt.Errorf("empty URL")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw // let a bare host default to https
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL %q: %w", rawURL, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("URL %q has no host", rawURL)
+	}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	inScope := []string{host}
+	if includeSubdomains {
+		inScope = append(inScope, "*."+host)
+	}
+	c := &Config{
+		Mode:  mode,
+		Scope: Scope{InScope: inScope},
+		Seeds: []string{u.String()},
+	}
+	c.applyDefaults()
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // applyDefaults fills sensible, conservative defaults for unset fields.
 func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Mode) == "" {
