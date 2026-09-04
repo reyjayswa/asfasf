@@ -108,7 +108,10 @@ func runScan(args []string) {
 	cfgPath := fs.String("config", "", "path to scope config YAML (required)")
 	jsonOut := fs.String("json", "", "write JSON report to this path")
 	htmlOut := fs.String("html", "", "write HTML report to this path")
+	sarifOut := fs.String("sarif", "", "write SARIF 2.1.0 report to this path (for CI)")
+	mdOut := fs.String("md", "", "write a Markdown report to this path")
 	mode := fs.String("mode", "", "override scan mode: passive|safe|aggressive")
+	headless := fs.Bool("headless", false, "enable headless-browser scanning (JS render + DOM XSS)")
 	quiet := fs.Bool("quiet", false, "suppress progress output")
 	fs.Parse(args)
 
@@ -121,12 +124,20 @@ func runScan(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	executeScan(cfg, *jsonOut, *htmlOut, *quiet)
+	if *headless {
+		cfg.Headless.Enabled = true
+	}
+	executeScan(cfg, outputs{json: *jsonOut, html: *htmlOut, sarif: *sarifOut, md: *mdOut}, *quiet)
+}
+
+// outputs names the report files a scan should write.
+type outputs struct {
+	json, html, sarif, md string
 }
 
 // executeScan builds the engine, runs the scan, prints the summary, and writes
 // any requested reports. Shared by the scan command and the interactive init.
-func executeScan(cfg *config.Config, jsonOut, htmlOut string, quiet bool) {
+func executeScan(cfg *config.Config, out outputs, quiet bool) {
 	eng, err := engine.New(cfg, newLogger(quiet))
 	if err != nil {
 		fatal(err)
@@ -137,17 +148,29 @@ func executeScan(cfg *config.Config, jsonOut, htmlOut string, quiet bool) {
 	rep := eng.Run(ctx)
 	printSummary(rep)
 
-	if jsonOut != "" {
-		if err := report.WriteJSON(rep, jsonOut); err != nil {
+	if out.json != "" {
+		if err := report.WriteJSON(rep, out.json); err != nil {
 			fatal(err)
 		}
-		fmt.Fprintf(os.Stderr, "[*] JSON report written to %s\n", jsonOut)
+		fmt.Fprintf(os.Stderr, "[*] JSON report written to %s\n", out.json)
 	}
-	if htmlOut != "" {
-		if err := report.WriteHTML(rep, htmlOut); err != nil {
+	if out.html != "" {
+		if err := report.WriteHTML(rep, out.html); err != nil {
 			fatal(err)
 		}
-		fmt.Fprintf(os.Stderr, "[*] HTML report written to %s\n", htmlOut)
+		fmt.Fprintf(os.Stderr, "[*] HTML report written to %s\n", out.html)
+	}
+	if out.sarif != "" {
+		if err := report.WriteSARIF(rep, out.sarif); err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "[*] SARIF report written to %s\n", out.sarif)
+	}
+	if out.md != "" {
+		if err := report.WriteMarkdown(rep, out.md); err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "[*] Markdown report written to %s\n", out.md)
 	}
 }
 
@@ -212,7 +235,7 @@ func runInit(args []string) {
 				fatal(err)
 			}
 			fmt.Println("Running a scan now…")
-			executeScan(cfg, "", reportPath, false)
+			executeScan(cfg, outputs{html: reportPath}, false)
 			fmt.Printf("\nDone. Open %s in your browser to view the results.\n", reportPath)
 			fmt.Println("Run it again any time: scanner scan -config " + *out + " -html " + reportPath)
 		} else {
@@ -384,8 +407,10 @@ func printSummary(rep *engine.Report) {
 	fmt.Printf(" Pages crawled:   %d\n", rep.PagesCrawled)
 	fmt.Printf(" Origins scanned: %d\n", rep.OriginsScanned)
 	fmt.Printf(" Endpoints:       %d\n", len(rep.Endpoints))
+	fmt.Printf(" Headless:        %v\n", rep.Headless)
 	fmt.Printf(" Requests sent:   %d\n", rep.RequestsSent)
 	fmt.Printf(" Out-of-scope blocked: %d\n", rep.Blocked)
+	fmt.Printf(" Rate-limited (429):   %d\n", rep.RateLimited)
 	fmt.Println("---------------------------------------------")
 	fmt.Printf(" Critical: %d   High: %d   Medium: %d   Low: %d   Info: %d\n",
 		c.Critical, c.High, c.Medium, c.Low, c.Info)

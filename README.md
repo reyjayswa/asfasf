@@ -26,9 +26,19 @@ HTML report, and a local web dashboard.
     the site checks.
   - `aggressive` — extra payload variants and larger path lists for higher
     coverage. Still no time-based-by-default or denial-of-service payloads.
-- **Global rate limiting** and bounded concurrency to stay polite.
-- **Reports**: CLI summary, JSON, self-contained HTML, and a localhost web
-  dashboard with a re-scan button.
+- **Adaptive rate limiting**: a global request cap that automatically backs
+  off on HTTP 429 (honoring `Retry-After`) and eases back on success, so you
+  rarely need a proxy — slowing down is the fix for rate limiting.
+- **Headless-browser scanning** (optional): drives the machine's Chromium to
+  render JavaScript apps, discover DOM-built routes the HTML crawler misses,
+  and detect DOM-based XSS by executing payloads in a real browser. Scope is
+  still enforced — it never navigates off-scope and blocks off-scope
+  subresource requests.
+- **Findings enriched** with a CWE id, an OWASP Top 10 (2021) category, and an
+  indicative severity score.
+- **Reports**: CLI summary, JSON, self-contained HTML, a localhost web
+  dashboard, **SARIF 2.1.0** (for CI / code scanning), and a submission-ready
+  **Markdown** writeup.
 
 ### Checks
 
@@ -39,19 +49,27 @@ HTML report, and a local web dashboard.
 | **Reflected XSS** | active | Uniquely-tagged HTML breakout markers, multiple contexts in aggressive mode | `xss` |
 | **SQL injection** | active | Error-based, boolean-based, and bounded time-based blind | `sqli`, `sqli_time_based` |
 | **SQL dumper** | exploit | Bounded proof-of-impact extraction on **firmly-confirmed** SQLi: version, user, database, table/column enumeration, and an optional tiny row sample | `sql_dump` |
-
-All of the above are **on by default** (a minimal config with no `checks` block
-runs every check), including the dumper's `dump.sample_data`, which reads a
-bounded sample of actual row values. Set `sample_data: false` if your program
-forbids reading data.
 | **Config exposure** | active | `.env`, `.git/config`, source/config backups, `phpinfo`, SQL dumps — matched by file-specific signatures | `config_exposure` |
 | **Admin panel finder** | active | Common admin/login panels, gated on password fields, panel signatures, or auth challenges | `admin_panel` |
 | **CMS fingerprint** | active | WordPress / Joomla / Drupal / Magento, with version where available | `cms_fingerprint` |
 | **Shell exposure** | active | Detects an **already-exposed** web shell / backdoor (a sign of compromise) by known shell signatures | `shell_exposure` |
 | **Subdomain takeover** | active | Resolves CNAMEs and matches dangling-service takeover fingerprints (GitHub Pages, S3, Heroku, Fastly, Shopify, …) | `subdomain_takeover` |
+| **Open redirect** | active | Injects an external canary and detects redirects to it (Location header or client-side) | `open_redirect` |
+| **Path traversal** | active | Reads known files (`/etc/passwd`, `win.ini`) via traversal payloads | `path_traversal` |
+| **Command injection** | active | Detects shell command execution via `id`/`ver` output signatures | `command_injection` |
+| **SSTI** | active | Server-side template injection via a distinctive arithmetic product | `ssti` |
+| **CORS** | active | Reflected/`null`/`*` origin with credentials | `cors` |
+| **Security headers** | passive | Missing/weak CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy | `security_headers` |
+| **Cookie flags** | passive | Missing Secure / HttpOnly / SameSite | `cookies` |
+| **CSRF** | passive | State-changing forms with no anti-CSRF token | `csrf` |
+| **DOM-based XSS** | headless | Executes payloads in a real browser to catch client-side sinks (innerHTML, eval, location) | `headless.enabled` |
 
-All active checks are skipped in `passive` mode. Site checks run once per
-in-scope origin; injection checks run per discovered parameter.
+All non-headless checks are **on by default** (a minimal config with no
+`checks` block runs every one), including the time-based blind SQLi probe and
+the SQL dumper (with a bounded row sample — set `dump.sample_data: false` to
+forbid reading data). Headless scanning stays opt-in because it launches a
+browser and is slow. Active checks are skipped in `passive` mode; site checks
+run once per in-scope origin; injection checks run per discovered parameter.
 
 ### The SQL dumper and data minimization
 
@@ -93,7 +111,8 @@ Requires Go 1.24+.
 #    ...or the fully-documented one: ./scanner init -o scope.yaml
 
 # 2. Run a scan and write reports
-./scanner scan -config scope.yaml -json report.json -html report.html
+./scanner scan -config scope.yaml -html report.html -sarif report.sarif -md report.md
+
 
 # 3. Or browse results in a local dashboard
 ./scanner serve -config scope.yaml -addr 127.0.0.1:8080
@@ -147,6 +166,14 @@ checks:
   subdomain_takeover: true # dangling DNS -> unclaimed service
   cve_fingerprint: true    # version -> known CVEs (no extra requests)
   sql_dump: true           # bounded extraction on confirmed SQLi (on by default)
+  open_redirect: true
+  path_traversal: true
+  command_injection: true
+  ssti: true               # server-side template injection
+  cors: true               # CORS misconfiguration
+  security_headers: true   # missing/weak CSP, HSTS, X-Frame-Options, ...
+  cookies: true            # missing Secure/HttpOnly/SameSite
+  csrf: true               # forms without an anti-CSRF token
 
 dump:                      # only used when sql_dump is true
   max_tables: 20
@@ -156,6 +183,11 @@ dump:                      # only used when sql_dump is true
 
 takeover:
   extra_subdomains: []     # extra in-scope hosts to check for takeover
+
+headless:                  # JS rendering + DOM XSS (opt-in; launches Chromium)
+  enabled: false           # or pass -headless on the scan command
+  max_urls: 25
+  timeout_seconds: 20
 ```
 
 Every seed must itself fall inside `scope.in_scope`, or the scanner refuses to
@@ -165,7 +197,7 @@ start. The `mode` in the file can be overridden per run with `-mode`.
 
 | Command | Purpose |
 |---------|---------|
-| `scan`  | Run a scan; write `-json` / `-html` reports; print a summary. |
+| `scan`  | Run a scan; write `-json` / `-html` / `-sarif` / `-md` reports; `-headless` enables browser scanning; print a summary. |
 | `serve` | Run a scan and serve an HTML dashboard on `-addr` (localhost by default), with a re-scan button and a `/report.json` endpoint. |
 | `init`  | Write a config. `-interactive` (or `-i`) asks a few questions, builds it for you, and offers to run the scan immediately; `-minimal` writes a short starter (scope + seeds only); otherwise a fully-documented one. |
 
@@ -184,13 +216,23 @@ internal/checks               shared Finding / Endpoint / Detection types
 internal/checks/xss           reflected XSS check
 internal/checks/sqli          error / boolean / time-based SQLi checks
 internal/checks/sqldumper     bounded SQL data extraction (exploit)
+internal/checks/openredirect  open redirect
+internal/checks/pathtraversal path traversal / local file read
+internal/checks/cmdinjection  OS command injection
+internal/checks/ssti          server-side template injection
+internal/checks/cors          CORS misconfiguration
+internal/checks/secheaders    missing/weak security headers (passive)
+internal/checks/cookies       insecure cookie flags (passive)
+internal/checks/csrf          missing anti-CSRF token (passive)
 internal/checks/configexp     sensitive file / config exposure
 internal/checks/adminpanel    admin panel / login finder
 internal/checks/cmsfp         CMS fingerprint
 internal/checks/shellexp      exposed web-shell detection
 internal/checks/subtakeover   subdomain takeover (DNS + body fingerprints)
 internal/checks/cve           version -> known-CVE mapping
-internal/engine               orchestration (crawl -> fingerprint/CVE -> site + injection) -> Report
+internal/browser              headless Chromium (chromedp): JS render, SPA discovery, DOM-XSS
+internal/enrich               CWE / OWASP / score annotation
+internal/engine               orchestration (crawl -> fingerprint/CVE -> headless -> site + injection) -> Report
 internal/report               JSON + HTML rendering
 internal/dashboard            localhost web UI
 ```

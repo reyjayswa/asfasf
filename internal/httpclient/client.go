@@ -8,11 +8,14 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/reyjayswa/asfasf/internal/config"
@@ -43,6 +46,12 @@ type Client struct {
 	// concurrency are informational only.
 	requests int64
 	blocked  int64
+
+	// backoffMs is an adaptive extra delay (milliseconds) applied before each
+	// request. It grows when the target returns HTTP 429 and decays on
+	// success, so the scanner automatically slows down under rate limiting.
+	backoffMs   int64
+	rateLimited int64
 }
 
 // New builds a Client from config and a compiled scope matcher.
@@ -79,22 +88,71 @@ func New(cfg config.HTTP, sc *scope.Matcher) *Client {
 	return c
 }
 
-// Do issues a request after waiting for a rate-limit token and confirming
-// the target URL is in scope. An out-of-scope URL returns an error and is
-// never sent on the wire.
+// Do issues a request after waiting for a rate-limit token and confirming the
+// target URL is in scope. An out-of-scope URL returns an error and is never
+// sent on the wire. On HTTP 429 the client honors Retry-After, grows an
+// adaptive backoff, and retries the request once.
 func (c *Client) Do(ctx context.Context, method, rawURL string, body io.Reader, headers map[string]string) (*Response, error) {
 	if !c.scope.AllowsURL(rawURL) {
-		c.blocked++
+		atomic.AddInt64(&c.blocked, 1)
 		return nil, fmt.Errorf("refusing out-of-scope request to %s", rawURL)
 	}
 
-	// Wait for a rate-limit token or cancellation.
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-c.limiter:
+	// Buffer the body so the request can be retried after a 429.
+	var buf []byte
+	if body != nil {
+		var err error
+		buf, err = io.ReadAll(body)
+		if err != nil {
+			return nil, err
+		}
 	}
 
+	const maxRetries = 1
+	for attempt := 0; ; attempt++ {
+		if err := c.waitTurn(ctx); err != nil {
+			return nil, err
+		}
+		resp, err := c.send(ctx, method, rawURL, buf, headers)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == http.StatusTooManyRequests && attempt < maxRetries {
+			atomic.AddInt64(&c.rateLimited, 1)
+			c.growBackoff()
+			if err := c.honorRetryAfter(ctx, resp.Header.Get("Retry-After")); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		c.decayBackoff()
+		return resp, nil
+	}
+}
+
+// waitTurn blocks for a rate-limit token, then for any adaptive backoff delay.
+func (c *Client) waitTurn(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.limiter:
+	}
+	if b := atomic.LoadInt64(&c.backoffMs); b > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(b) * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// send performs one HTTP request and reads its (bounded) body.
+func (c *Client) send(ctx context.Context, method, rawURL string, buf []byte, headers map[string]string) (*Response, error) {
+	var body io.Reader
+	if buf != nil {
+		body = bytes.NewReader(buf)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
 		return nil, err
@@ -104,7 +162,7 @@ func (c *Client) Do(ctx context.Context, method, rawURL string, body io.Reader, 
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	if body != nil && req.Header.Get("Content-Type") == "" {
+	if buf != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
@@ -114,7 +172,7 @@ func (c *Client) Do(ctx context.Context, method, rawURL string, body io.Reader, 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	c.requests++
+	atomic.AddInt64(&c.requests, 1)
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
@@ -127,6 +185,55 @@ func (c *Client) Do(ctx context.Context, method, rawURL string, body io.Reader, 
 		URL:     rawURL,
 		Elapsed: time.Since(start),
 	}, nil
+}
+
+// growBackoff increases the adaptive delay (capped at 10s).
+func (c *Client) growBackoff() {
+	for {
+		old := atomic.LoadInt64(&c.backoffMs)
+		next := old + 500
+		if next > 10000 {
+			next = 10000
+		}
+		if atomic.CompareAndSwapInt64(&c.backoffMs, old, next) {
+			return
+		}
+	}
+}
+
+// decayBackoff eases the adaptive delay back toward zero on success.
+func (c *Client) decayBackoff() {
+	for {
+		old := atomic.LoadInt64(&c.backoffMs)
+		if old == 0 {
+			return
+		}
+		next := old - 100
+		if next < 0 {
+			next = 0
+		}
+		if atomic.CompareAndSwapInt64(&c.backoffMs, old, next) {
+			return
+		}
+	}
+}
+
+// honorRetryAfter sleeps for a Retry-After header value (seconds form),
+// bounded to 30s, respecting context cancellation.
+func (c *Client) honorRetryAfter(ctx context.Context, header string) error {
+	secs, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || secs <= 0 {
+		return nil
+	}
+	if secs > 30 {
+		secs = 30
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Duration(secs) * time.Second):
+		return nil
+	}
 }
 
 // Get is a convenience wrapper for GET requests.
@@ -143,8 +250,11 @@ func (c *Client) PostForm(ctx context.Context, rawURL, form string) (*Response, 
 
 // Stats returns the number of sent and scope-blocked requests.
 func (c *Client) Stats() (sent, blocked int64) {
-	return c.requests, c.blocked
+	return atomic.LoadInt64(&c.requests), atomic.LoadInt64(&c.blocked)
 }
+
+// RateLimited returns how many times the target responded with HTTP 429.
+func (c *Client) RateLimited() int64 { return atomic.LoadInt64(&c.rateLimited) }
 
 // BodyString returns the response body as a string.
 func (r *Response) BodyString() string { return string(r.Body) }

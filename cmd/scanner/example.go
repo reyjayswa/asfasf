@@ -93,6 +93,20 @@ checks:
   # dump.sample_data is turned on below. Set to false if a program forbids it.
   sql_dump: true
 
+  # Additional injection/logic checks (active, over parameters).
+  open_redirect: true
+  path_traversal: true
+  command_injection: true
+  ssti: true              # server-side template injection
+
+  # CORS misconfiguration (active, per origin).
+  cors: true
+
+  # Passive analyzers over already-fetched responses (no extra requests).
+  security_headers: true  # missing/weak CSP, HSTS, X-Frame-Options, etc.
+  cookies: true           # missing Secure/HttpOnly/SameSite
+  csrf: true              # state-changing forms lacking an anti-CSRF token
+
 dump:
   max_tables: 20
   max_columns: 20
@@ -104,4 +118,13 @@ dump:
 
 takeover:
   extra_subdomains: []     # optional extra in-scope hosts to check for takeover
+
+# Headless-browser stage: renders JavaScript apps with Chromium to discover
+# DOM-built routes and detect DOM-based XSS the HTML crawler cannot. It is much
+# slower (launches a browser) so it is OFF by default; enable per run with the
+# -headless flag or here. Requires a Chromium binary on the machine.
+headless:
+  enabled: false
+  max_urls: 25             # cap how many URLs are rendered
+  timeout_seconds: 20      # per-page render timeout
 `

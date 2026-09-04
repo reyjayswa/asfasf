@@ -1,7 +1,7 @@
 // Package engine wires the stages together: crawl, fingerprint + CVE mapping,
-// then (unless running passively) the active site checks and the parameter
-// injection checks. It produces a single Report that the report and dashboard
-// packages render.
+// optional headless-browser discovery, passive analyzers, then (unless running
+// passively) the active site and injection checks. Findings are enriched with
+// CWE/OWASP/score, de-duplicated, and returned as a single Report.
 package engine
 
 import (
@@ -11,18 +11,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/reyjayswa/asfasf/internal/browser"
 	"github.com/reyjayswa/asfasf/internal/checks"
 	"github.com/reyjayswa/asfasf/internal/checks/adminpanel"
+	"github.com/reyjayswa/asfasf/internal/checks/cmdinjection"
 	"github.com/reyjayswa/asfasf/internal/checks/cmsfp"
 	"github.com/reyjayswa/asfasf/internal/checks/configexp"
+	"github.com/reyjayswa/asfasf/internal/checks/cookies"
+	"github.com/reyjayswa/asfasf/internal/checks/cors"
+	"github.com/reyjayswa/asfasf/internal/checks/csrf"
 	"github.com/reyjayswa/asfasf/internal/checks/cve"
+	"github.com/reyjayswa/asfasf/internal/checks/openredirect"
+	"github.com/reyjayswa/asfasf/internal/checks/pathtraversal"
+	"github.com/reyjayswa/asfasf/internal/checks/secheaders"
 	"github.com/reyjayswa/asfasf/internal/checks/shellexp"
 	"github.com/reyjayswa/asfasf/internal/checks/sqldumper"
 	"github.com/reyjayswa/asfasf/internal/checks/sqli"
+	"github.com/reyjayswa/asfasf/internal/checks/ssti"
 	"github.com/reyjayswa/asfasf/internal/checks/subtakeover"
 	"github.com/reyjayswa/asfasf/internal/checks/xss"
 	"github.com/reyjayswa/asfasf/internal/config"
 	"github.com/reyjayswa/asfasf/internal/crawler"
+	"github.com/reyjayswa/asfasf/internal/enrich"
 	"github.com/reyjayswa/asfasf/internal/fingerprint"
 	"github.com/reyjayswa/asfasf/internal/httpclient"
 	"github.com/reyjayswa/asfasf/internal/scope"
@@ -38,10 +48,12 @@ type Report struct {
 	OutOfScope     []string          `json:"out_of_scope"`
 	PagesCrawled   int               `json:"pages_crawled"`
 	OriginsScanned int               `json:"origins_scanned"`
+	Headless       bool              `json:"headless"`
 	Endpoints      []checks.Endpoint `json:"endpoints"`
 	Findings       []checks.Finding  `json:"findings"`
 	RequestsSent   int64             `json:"requests_sent"`
 	Blocked        int64             `json:"blocked_out_of_scope"`
+	RateLimited    int64             `json:"rate_limited"`
 }
 
 // Logger receives human-readable progress lines.
@@ -51,6 +63,11 @@ type Logger func(format string, args ...interface{})
 type siteChecker interface {
 	Name() string
 	Run(ctx context.Context, origin string) []checks.Finding
+}
+
+// endpointChecker is implemented by every parameter-scoped check module.
+type endpointChecker interface {
+	Run(ctx context.Context, ep checks.Endpoint) []checks.Finding
 }
 
 // Engine runs a scan for one configuration.
@@ -99,45 +116,74 @@ func (e *Engine) Run(ctx context.Context) *Report {
 	e.log("crawling from %d seed(s) in %s mode…", len(e.cfg.Seeds), e.cfg.Mode)
 	cr := e.crawl.Run(ctx, e.cfg.Seeds)
 	rep.PagesCrawled = len(cr.Pages)
-	rep.Endpoints = cr.Endpoints
 	e.log("crawl complete: %d page(s), %d endpoint(s) discovered", len(cr.Pages), len(cr.Endpoints))
 
-	// Recon / fingerprinting always runs; it is passive.
 	fpFindings, detections := fingerprint.Analyze(cr.Pages)
 	findings := fpFindings
-	e.log("fingerprinting complete: %d recon finding(s), %d tech detection(s)", len(fpFindings), len(detections))
-
-	// CVE mapping is pure analysis of the passive fingerprint data.
 	if e.cfg.Check.CVEFingerprint {
-		cveFindings := cve.Analyze(detections)
-		findings = append(findings, cveFindings...)
-		e.log("CVE mapping complete: %d potential CVE(s)", len(cveFindings))
+		findings = append(findings, cve.Analyze(detections)...)
 	}
 
 	origins := e.computeOrigins(cr.Pages)
 	rep.OriginsScanned = len(origins)
+	endpoints := cr.Endpoints
+
+	// Optional headless-browser stage: render JS apps to discover extra routes.
+	var b *browser.Browser
+	if e.cfg.ActiveChecks() && e.cfg.Headless.Enabled {
+		if browser.Available() {
+			bb, err := browser.New(e.scope, e.cfg.Headless.TimeoutSeconds)
+			if err == nil {
+				b = bb
+				defer b.Close()
+				rep.Headless = true
+				extra := e.headlessDiscover(ctx, b, origins)
+				if len(extra) > 0 {
+					endpoints = mergeEndpoints(endpoints, extra)
+					e.log("headless discovery added %d endpoint(s)", len(extra))
+				}
+			} else {
+				e.log("headless requested but unavailable: %v", err)
+			}
+		} else {
+			e.log("headless requested but no chromium binary was found")
+		}
+	}
+	rep.Endpoints = endpoints
+
+	// Passive analyzers (no new requests; run in every mode).
+	if e.cfg.Check.SecurityHeaders {
+		findings = append(findings, secheaders.Analyze(cr.Pages)...)
+	}
+	if e.cfg.Check.Cookies {
+		findings = append(findings, cookies.Analyze(cr.Pages)...)
+	}
+	if e.cfg.Check.CSRF {
+		findings = append(findings, csrf.Analyze(endpoints)...)
+	}
 
 	if e.cfg.ActiveChecks() {
-		site := e.runSiteChecks(ctx, origins)
-		findings = append(findings, site...)
-		e.log("site checks complete: %d finding(s)", len(site))
-
-		active := e.runEndpointChecks(ctx, cr.Endpoints)
-		findings = append(findings, active...)
-		e.log("injection checks complete: %d finding(s)", len(active))
+		findings = append(findings, e.runSiteChecks(ctx, origins)...)
+		findings = append(findings, e.runEndpointChecks(ctx, endpoints)...)
+		if b != nil {
+			findings = append(findings, e.runDOMXSS(ctx, b, endpoints)...)
+		}
 	} else {
 		e.log("passive mode: skipping active site and injection checks")
 	}
 
+	enrich.Apply(findings)
+	findings = dedupe(findings)
 	sortFindings(findings)
+
 	rep.Findings = findings
 	rep.RequestsSent, rep.Blocked = e.client.Stats()
+	rep.RateLimited = e.client.RateLimited()
 	rep.FinishedAt = time.Now()
 	return rep
 }
 
-// computeOrigins returns the deduplicated, in-scope set of scheme://host
-// origins derived from the seeds and every crawled page.
+// computeOrigins returns the deduplicated, in-scope scheme://host origins.
 func (e *Engine) computeOrigins(pages []crawler.Page) []string {
 	set := map[string]bool{}
 	add := func(raw string) {
@@ -164,8 +210,6 @@ func (e *Engine) computeOrigins(pages []crawler.Page) []string {
 	return out
 }
 
-// takeoverOrigins is the origin set the subdomain-takeover check runs over:
-// the crawled origins plus any configured extra subdomains that are in scope.
 func (e *Engine) takeoverOrigins(origins []string) []string {
 	set := map[string]bool{}
 	for _, o := range origins {
@@ -190,12 +234,9 @@ type siteJob struct {
 	checker siteChecker
 }
 
-// runSiteChecks runs every enabled origin-scoped check across all origins,
-// bounded by the configured concurrency.
+// runSiteChecks runs every enabled origin-scoped check across all origins.
 func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.Finding {
 	aggressive := e.cfg.Aggressive()
-
-	// Non-DNS site checks run over the crawled origins.
 	var general []siteChecker
 	if e.cfg.Check.ConfigExposure {
 		general = append(general, configexp.New(e.client, aggressive))
@@ -209,6 +250,9 @@ func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.F
 	if e.cfg.Check.ShellExposure {
 		general = append(general, shellexp.New(e.client, aggressive))
 	}
+	if e.cfg.Check.CORS {
+		general = append(general, cors.New(e.client, aggressive))
+	}
 
 	var jobs []siteJob
 	for _, o := range origins {
@@ -216,8 +260,6 @@ func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.F
 			jobs = append(jobs, siteJob{origin: o, checker: chk})
 		}
 	}
-	// Subdomain takeover runs over the extended origin set (adds configured
-	// extra subdomains) since dangling records are often on unused hosts.
 	if e.cfg.Check.SubdomainTakeover {
 		st := subtakeover.New(e.client, aggressive)
 		for _, o := range e.takeoverOrigins(origins) {
@@ -225,10 +267,6 @@ func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.F
 		}
 	}
 
-	return e.runJobs(ctx, jobs)
-}
-
-func (e *Engine) runJobs(ctx context.Context, jobs []siteJob) []checks.Finding {
 	var (
 		mu       sync.Mutex
 		findings []checks.Finding
@@ -244,8 +282,7 @@ func (e *Engine) runJobs(ctx context.Context, jobs []siteJob) []checks.Finding {
 		go func(j siteJob) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			res := j.checker.Run(ctx, j.origin)
-			if len(res) > 0 {
+			if res := j.checker.Run(ctx, j.origin); len(res) > 0 {
 				mu.Lock()
 				findings = append(findings, res...)
 				mu.Unlock()
@@ -257,19 +294,29 @@ func (e *Engine) runJobs(ctx context.Context, jobs []siteJob) []checks.Finding {
 }
 
 // runEndpointChecks probes every parameterized endpoint with the enabled
-// injection checks, and (when enabled) runs the bounded SQL dumper against
-// any endpoint/parameter with a firmly-confirmed SQL injection.
+// injection checks, escalating firm SQLi to the bounded dumper.
 func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpoint) []checks.Finding {
-	var (
-		xssChk  *xss.Checker
-		sqliChk *sqli.Checker
-		dumper  *sqldumper.Checker
-	)
+	aggr := e.cfg.Aggressive()
+	var generic []endpointChecker
 	if e.cfg.Check.XSS {
-		xssChk = xss.New(e.client, e.cfg.Aggressive())
+		generic = append(generic, xss.New(e.client, aggr))
 	}
+	if e.cfg.Check.OpenRedirect {
+		generic = append(generic, openredirect.New(e.client, aggr))
+	}
+	if e.cfg.Check.PathTraversal {
+		generic = append(generic, pathtraversal.New(e.client, aggr))
+	}
+	if e.cfg.Check.CommandInjection {
+		generic = append(generic, cmdinjection.New(e.client, aggr))
+	}
+	if e.cfg.Check.SSTI {
+		generic = append(generic, ssti.New(e.client, aggr))
+	}
+	var sqliChk *sqli.Checker
+	var dumper *sqldumper.Checker
 	if e.cfg.Check.SQLi {
-		sqliChk = sqli.New(e.client, e.cfg.Aggressive(), e.cfg.Check.SQLiTimeBased, e.cfg.Check.SQLiDelaySeconds)
+		sqliChk = sqli.New(e.client, aggr, e.cfg.Check.SQLiTimeBased, e.cfg.Check.SQLiDelaySeconds)
 	}
 	if e.cfg.Check.SQLDump {
 		dumper = sqldumper.New(e.client, sqldumper.Options{
@@ -279,7 +326,7 @@ func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpo
 			SampleData: e.cfg.Dump.SampleData,
 		})
 	}
-	if xssChk == nil && sqliChk == nil {
+	if len(generic) == 0 && sqliChk == nil {
 		return nil
 	}
 
@@ -299,13 +346,12 @@ func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpo
 			defer wg.Done()
 			defer func() { <-sem }()
 			var local []checks.Finding
-			if xssChk != nil {
-				local = append(local, xssChk.Run(ctx, ep)...)
+			for _, chk := range generic {
+				local = append(local, chk.Run(ctx, ep)...)
 			}
 			if sqliChk != nil {
 				sqliFindings := sqliChk.Run(ctx, ep)
 				local = append(local, sqliFindings...)
-				// Escalate firmly-confirmed SQLi with bounded extraction.
 				if dumper != nil {
 					for _, f := range sqliFindings {
 						if f.Type == "sqli" && f.Confidence == "firm" && f.Parameter != "" {
@@ -323,6 +369,110 @@ func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpo
 	}
 	wg.Wait()
 	return findings
+}
+
+// headlessDiscover renders origins in a real browser and returns any new
+// in-scope, parameterized endpoints found in the rendered DOM.
+func (e *Engine) headlessDiscover(ctx context.Context, b *browser.Browser, origins []string) []checks.Endpoint {
+	seen := map[string]bool{}
+	var out []checks.Endpoint
+	budget := e.cfg.Headless.MaxURLs
+	for _, o := range origins {
+		if budget <= 0 || ctx.Err() != nil {
+			break
+		}
+		budget--
+		_, links, err := b.Discover(ctx, o+"/")
+		if err != nil {
+			continue
+		}
+		for _, l := range links {
+			u, err := url.Parse(l)
+			if err != nil || len(u.Query()) == 0 || !e.scope.AllowsURL(l) {
+				continue
+			}
+			params := make([]string, 0, len(u.Query()))
+			for k := range u.Query() {
+				params = append(params, k)
+			}
+			sort.Strings(params)
+			base := *u
+			base.RawQuery = ""
+			key := base.String() + "?" + join(params)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, checks.Endpoint{URL: base.String(), Method: "GET", Params: params, Source: "headless"})
+		}
+	}
+	return out
+}
+
+// runDOMXSS tests parameterized endpoints for DOM-based XSS in the browser,
+// bounded by the headless URL budget.
+func (e *Engine) runDOMXSS(ctx context.Context, b *browser.Browser, endpoints []checks.Endpoint) []checks.Finding {
+	var findings []checks.Finding
+	budget := e.cfg.Headless.MaxURLs
+	for _, ep := range endpoints {
+		if budget <= 0 || ctx.Err() != nil {
+			break
+		}
+		for _, p := range ep.Params {
+			if budget <= 0 {
+				break
+			}
+			budget--
+			findings = append(findings, b.TestDOMXSS(ctx, ep, p, e.cfg.Aggressive())...)
+		}
+	}
+	return findings
+}
+
+// mergeEndpoints appends new endpoints not already present (by method+url+params).
+func mergeEndpoints(base, extra []checks.Endpoint) []checks.Endpoint {
+	seen := map[string]bool{}
+	key := func(ep checks.Endpoint) string {
+		ps := append([]string{}, ep.Params...)
+		sort.Strings(ps)
+		return ep.Method + " " + ep.URL + " " + join(ps)
+	}
+	for _, ep := range base {
+		seen[key(ep)] = true
+	}
+	for _, ep := range extra {
+		if !seen[key(ep)] {
+			seen[key(ep)] = true
+			base = append(base, ep)
+		}
+	}
+	return base
+}
+
+func join(s []string) string {
+	out := ""
+	for i, v := range s {
+		if i > 0 {
+			out += ","
+		}
+		out += v
+	}
+	return out
+}
+
+// dedupe collapses findings that share type, URL, parameter, and title.
+func dedupe(findings []checks.Finding) []checks.Finding {
+	seen := map[string]bool{}
+	out := findings[:0]
+	for _, f := range findings {
+		key := f.Type + "|" + f.URL + "|" + f.Parameter + "|" + f.Title
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, f)
+	}
+	return out
 }
 
 // sortFindings orders findings by severity (desc) then type and URL.

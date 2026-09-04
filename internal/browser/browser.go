@@ -77,6 +77,18 @@ func New(sc *scope.Matcher, timeoutSeconds int) (*Browser, error) {
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		// Keep Chromium from making its own external calls (connectivity
+		// checks, component/safebrowsing updates, sync, telemetry), so the
+		// browser only ever talks to in-scope targets.
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-component-update", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("safebrowsing-disable-auto-update", true),
+		chromedp.Flag("metrics-recording-only", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("mute-audio", true),
 	)
 	alloc, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	return &Browser{

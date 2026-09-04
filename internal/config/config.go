@@ -34,6 +34,7 @@ type Config struct {
 	Check    Checks   `yaml:"checks"`
 	Dump     Dump     `yaml:"dump"`
 	Takeover Takeover `yaml:"takeover"`
+	Headless Headless `yaml:"headless"`
 }
 
 // Scan modes.
@@ -108,6 +109,31 @@ type Checks struct {
 	// SQL injection was firmly confirmed. It is an explicit opt-in on top of
 	// an active mode. Off by default. See Dump for its bounds.
 	SQLDump bool `yaml:"sql_dump"`
+
+	// Additional injection/logic checks (active, over parameters).
+	OpenRedirect     bool `yaml:"open_redirect"`
+	PathTraversal    bool `yaml:"path_traversal"`
+	CommandInjection bool `yaml:"command_injection"`
+	SSTI             bool `yaml:"ssti"`
+
+	// CORS misconfiguration (active, per origin).
+	CORS bool `yaml:"cors"`
+
+	// Passive analyzers over already-fetched responses (no extra requests;
+	// run in every mode).
+	SecurityHeaders bool `yaml:"security_headers"`
+	Cookies         bool `yaml:"cookies"`
+	CSRF            bool `yaml:"csrf"`
+}
+
+// Headless configures the optional headless-browser stage, which renders
+// JavaScript apps to discover DOM-built routes and detect DOM-based XSS. It
+// launches Chromium and is much slower than HTTP checks, so it is off by
+// default and only runs in an active mode.
+type Headless struct {
+	Enabled        bool `yaml:"enabled"`
+	MaxURLs        int  `yaml:"max_urls"`        // cap URLs rendered
+	TimeoutSeconds int  `yaml:"timeout_seconds"` // per-page render timeout
 }
 
 // Dump bounds the SQL data extractor (used only when checks.sql_dump is on).
@@ -186,6 +212,12 @@ func (c *Config) applyDefaults() {
 	if c.Dump.MaxRows <= 0 {
 		c.Dump.MaxRows = 5
 	}
+	if c.Headless.MaxURLs <= 0 {
+		c.Headless.MaxURLs = 25
+	}
+	if c.Headless.TimeoutSeconds <= 0 {
+		c.Headless.TimeoutSeconds = 20
+	}
 	c.applyCheckDefaults()
 }
 
@@ -195,7 +227,9 @@ func (c *Config) anyCheckEnabled() bool {
 	ch := c.Check
 	return ch.XSS || ch.SQLi || ch.AdminPanel || ch.ConfigExposure ||
 		ch.ShellExposure || ch.CMSFingerprint || ch.SubdomainTakeover ||
-		ch.CVEFingerprint || ch.SQLDump
+		ch.CVEFingerprint || ch.SQLDump || ch.OpenRedirect || ch.PathTraversal ||
+		ch.CommandInjection || ch.SSTI || ch.CORS || ch.SecurityHeaders ||
+		ch.Cookies || ch.CSRF
 }
 
 // applyCheckDefaults turns on the full check set when no checks were enabled,
@@ -220,6 +254,15 @@ func (c *Config) applyCheckDefaults() {
 	c.Check.CVEFingerprint = true
 	c.Check.SQLDump = true
 	c.Dump.SampleData = true
+	c.Check.OpenRedirect = true
+	c.Check.PathTraversal = true
+	c.Check.CommandInjection = true
+	c.Check.SSTI = true
+	c.Check.CORS = true
+	c.Check.SecurityHeaders = true
+	c.Check.Cookies = true
+	c.Check.CSRF = true
+	// Headless stays opt-in (slow, launches a browser): not enabled here.
 }
 
 // validate enforces the scope guardrails and basic sanity limits.
