@@ -136,6 +136,20 @@ type Checks struct {
 	// Requires oob.enabled and a callback address the target can reach, so it
 	// is an explicit opt-in.
 	SSRF bool `yaml:"ssrf"`
+
+	// GraphQL introspection exposure (active, per origin).
+	GraphQL bool `yaml:"graphql"`
+
+	// More injection checks (active, over parameters).
+	CRLF  bool `yaml:"crlf"`  // CRLF / response header injection
+	XXE   bool `yaml:"xxe"`   // XML external entity (in-band)
+	XPath bool `yaml:"xpath"` // XPath injection
+	NoSQL bool `yaml:"nosql"` // NoSQL (MongoDB) injection
+
+	// Passive analyzers over already-fetched responses (no extra requests).
+	JWT        bool `yaml:"jwt"`               // exposed / weak JSON Web Tokens
+	Secrets    bool `yaml:"secrets"`           // leaked API keys / secrets
+	DirListing bool `yaml:"directory_listing"` // directory listing enabled
 }
 
 // OOB configures the out-of-band interaction server used by blind checks
@@ -251,7 +265,9 @@ func (c *Config) anyCheckEnabled() bool {
 		ch.ShellExposure || ch.CMSFingerprint || ch.SubdomainTakeover ||
 		ch.CVEFingerprint || ch.SQLDump || ch.OpenRedirect || ch.PathTraversal ||
 		ch.CommandInjection || ch.SSTI || ch.CORS || ch.SecurityHeaders ||
-		ch.Cookies || ch.CSRF || ch.HeaderInjection || ch.Discovery || ch.SSRF
+		ch.Cookies || ch.CSRF || ch.HeaderInjection || ch.Discovery || ch.SSRF ||
+		ch.GraphQL || ch.CRLF || ch.XXE || ch.XPath || ch.NoSQL || ch.JWT ||
+		ch.Secrets || ch.DirListing
 }
 
 // applyCheckDefaults turns on the full check set when no checks were enabled,
@@ -286,6 +302,14 @@ func (c *Config) applyCheckDefaults() {
 	c.Check.CSRF = true
 	c.Check.HeaderInjection = true
 	c.Check.Discovery = true
+	c.Check.GraphQL = true
+	c.Check.CRLF = true
+	c.Check.XXE = true
+	c.Check.XPath = true
+	c.Check.NoSQL = true
+	c.Check.JWT = true
+	c.Check.Secrets = true
+	c.Check.DirListing = true
 	// Headless (browser) and SSRF (needs a reachable out-of-band callback)
 	// stay opt-in: not enabled here.
 }

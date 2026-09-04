@@ -110,6 +110,15 @@ checks:
   header_injection: true  # host-header injection + reflected request headers
   discovery: true         # robots.txt + sitemap.xml + JS endpoint mining
 
+  graphql: true           # GraphQL introspection exposure
+  crlf: true              # CRLF / response header injection
+  xxe: true               # XML external entity (in-band file read)
+  xpath: true             # XPath injection
+  nosql: true             # NoSQL (MongoDB) injection
+  jwt: true               # exposed / weak (alg=none) JSON Web Tokens
+  secrets: true           # leaked API keys / private keys in responses
+  directory_listing: true # autoindex / directory listing enabled
+
   # SSRF via out-of-band interaction. Off by default: it needs a callback
   # address the target can reach (see the oob block). Enable per run with -oob.
   ssrf: false

@@ -36,6 +36,16 @@ var table = map[string]meta{
 	"cms-fingerprint":    {"", "A06:2021-Vulnerable and Outdated Components"},
 	"fingerprint":        {"", "A06:2021-Vulnerable and Outdated Components"},
 	"recon":              {"", ""},
+	"header-injection":   {"CWE-644", "A05:2021-Security Misconfiguration"},
+	"ssrf":               {"CWE-918", "A10:2021-Server-Side Request Forgery"},
+	"graphql":            {"CWE-200", "A05:2021-Security Misconfiguration"},
+	"crlf-injection":     {"CWE-113", "A03:2021-Injection"},
+	"xxe":                {"CWE-611", "A05:2021-Security Misconfiguration"},
+	"xpath-injection":    {"CWE-643", "A03:2021-Injection"},
+	"nosql-injection":    {"CWE-943", "A03:2021-Injection"},
+	"jwt":                {"CWE-347", "A02:2021-Cryptographic Failures"},
+	"leaked-secret":      {"CWE-798", "A02:2021-Cryptographic Failures"},
+	"directory-listing":  {"CWE-548", "A05:2021-Security Misconfiguration"},
 }
 
 // scoreFor returns the indicative score for a severity.

@@ -66,6 +66,14 @@ HTML report, and a local web dashboard.
 | **Header injection** | active | Host-header injection (redirect/cache poisoning) and reflected request headers | `header_injection` |
 | **Recon discovery** | active | Mines robots.txt, sitemap.xml, and referenced JS for extra parameterized endpoints | `discovery` |
 | **SSRF (blind)** | out-of-band | Confirms server-side request forgery via a callback listener — no visible response needed | `ssrf` + `oob.enabled` |
+| **GraphQL introspection** | active | Detects a GraphQL endpoint with introspection enabled (schema disclosure) | `graphql` |
+| **CRLF injection** | active | Response header injection via CR/LF in a parameter | `crlf` |
+| **XXE** | active | In-band XML external entity file read | `xxe` |
+| **XPath injection** | active | XPath error-based injection | `xpath` |
+| **NoSQL injection** | active | MongoDB error-based injection | `nosql` |
+| **JWT weaknesses** | passive | Exposed tokens and `alg=none` / missing-expiry JWTs | `jwt` |
+| **Secret leakage** | passive | AWS/Google/Slack/GitHub keys and private keys in responses | `secrets` |
+| **Directory listing** | passive | Autoindex pages (Apache/nginx/Tomcat/IIS) | `directory_listing` |
 
 All non-headless checks are **on by default** (a minimal config with no
 `checks` block runs every one), including the time-based blind SQLi probe and
@@ -247,6 +255,14 @@ internal/checks/cookies       insecure cookie flags (passive)
 internal/checks/csrf          missing anti-CSRF token (passive)
 internal/checks/headerinj     host-header injection + reflected headers
 internal/checks/ssrf          blind SSRF via out-of-band interaction
+internal/checks/graphql       GraphQL introspection exposure
+internal/checks/crlf          CRLF / response header injection
+internal/checks/xxe           XML external entity (in-band)
+internal/checks/xpath         XPath injection
+internal/checks/nosql         NoSQL (MongoDB) injection
+internal/checks/jwt           exposed / weak JWTs (passive)
+internal/checks/secrets       leaked API keys / secrets (passive)
+internal/checks/dirlisting    directory listing enabled (passive)
 internal/checks/configexp     sensitive file / config exposure
 internal/checks/adminpanel    admin panel / login finder
 internal/checks/cmsfp         CMS fingerprint

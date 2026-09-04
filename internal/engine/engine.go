@@ -19,19 +19,27 @@ import (
 	"github.com/reyjayswa/asfasf/internal/checks/configexp"
 	"github.com/reyjayswa/asfasf/internal/checks/cookies"
 	"github.com/reyjayswa/asfasf/internal/checks/cors"
+	"github.com/reyjayswa/asfasf/internal/checks/crlf"
 	"github.com/reyjayswa/asfasf/internal/checks/csrf"
 	"github.com/reyjayswa/asfasf/internal/checks/cve"
+	"github.com/reyjayswa/asfasf/internal/checks/dirlisting"
+	"github.com/reyjayswa/asfasf/internal/checks/graphql"
 	"github.com/reyjayswa/asfasf/internal/checks/headerinj"
+	"github.com/reyjayswa/asfasf/internal/checks/jwt"
+	"github.com/reyjayswa/asfasf/internal/checks/nosql"
 	"github.com/reyjayswa/asfasf/internal/checks/openredirect"
 	"github.com/reyjayswa/asfasf/internal/checks/pathtraversal"
 	"github.com/reyjayswa/asfasf/internal/checks/secheaders"
+	"github.com/reyjayswa/asfasf/internal/checks/secrets"
 	"github.com/reyjayswa/asfasf/internal/checks/shellexp"
 	"github.com/reyjayswa/asfasf/internal/checks/sqldumper"
 	"github.com/reyjayswa/asfasf/internal/checks/sqli"
 	"github.com/reyjayswa/asfasf/internal/checks/ssrf"
 	"github.com/reyjayswa/asfasf/internal/checks/ssti"
 	"github.com/reyjayswa/asfasf/internal/checks/subtakeover"
+	"github.com/reyjayswa/asfasf/internal/checks/xpath"
 	"github.com/reyjayswa/asfasf/internal/checks/xss"
+	"github.com/reyjayswa/asfasf/internal/checks/xxe"
 	"github.com/reyjayswa/asfasf/internal/config"
 	"github.com/reyjayswa/asfasf/internal/crawler"
 	"github.com/reyjayswa/asfasf/internal/discovery"
@@ -187,6 +195,15 @@ func (e *Engine) Run(ctx context.Context) *Report {
 	if e.cfg.Check.CSRF {
 		findings = append(findings, csrf.Analyze(endpoints)...)
 	}
+	if e.cfg.Check.JWT {
+		findings = append(findings, jwt.Analyze(cr.Pages)...)
+	}
+	if e.cfg.Check.Secrets {
+		findings = append(findings, secrets.Analyze(cr.Pages)...)
+	}
+	if e.cfg.Check.DirListing {
+		findings = append(findings, dirlisting.Analyze(cr.Pages)...)
+	}
 
 	if e.cfg.ActiveChecks() {
 		findings = append(findings, e.runSiteChecks(ctx, origins)...)
@@ -282,6 +299,9 @@ func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.F
 	if e.cfg.Check.HeaderInjection {
 		general = append(general, headerinj.New(e.client, aggressive))
 	}
+	if e.cfg.Check.GraphQL {
+		general = append(general, graphql.New(e.client, aggressive))
+	}
 
 	var jobs []siteJob
 	for _, o := range origins {
@@ -341,6 +361,18 @@ func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpo
 	}
 	if e.cfg.Check.SSTI {
 		generic = append(generic, ssti.New(e.client, aggr))
+	}
+	if e.cfg.Check.CRLF {
+		generic = append(generic, crlf.New(e.client, aggr))
+	}
+	if e.cfg.Check.XXE {
+		generic = append(generic, xxe.New(e.client, aggr))
+	}
+	if e.cfg.Check.XPath {
+		generic = append(generic, xpath.New(e.client, aggr))
+	}
+	if e.cfg.Check.NoSQL {
+		generic = append(generic, nosql.New(e.client, aggr))
 	}
 	if oobSrv != nil {
 		generic = append(generic, ssrf.New(e.client, oobSrv, aggr))
