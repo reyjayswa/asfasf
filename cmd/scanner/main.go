@@ -12,9 +12,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -56,7 +58,7 @@ func usage() {
 Usage:
   scanner scan  -config <file> [-json out.json] [-html out.html] [-mode passive|safe|aggressive] [-quiet]
   scanner serve -config <file> [-addr 127.0.0.1:8080] [-mode ...] [-no-scan]
-  scanner init  [-o scope.yaml]
+  scanner init  [-o scope.yaml] [-interactive] [-minimal]
 
 Run "scanner <command> -h" for command flags.
 `, banner)
@@ -181,22 +183,166 @@ func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	out := fs.String("o", "scope.yaml", "output path for the config")
 	minimal := fs.Bool("minimal", false, "write a short starter config (just scope + seeds)")
+	interactive := fs.Bool("interactive", false, "answer a few questions to build the config")
+	fs.BoolVar(interactive, "i", false, "shorthand for -interactive")
 	fs.Parse(args)
 
 	if _, err := os.Stat(*out); err == nil {
 		fatal(fmt.Errorf("%s already exists; refusing to overwrite", *out))
 	}
+
+	if *interactive {
+		body, ok := interactiveConfig(os.Stdin, os.Stdout)
+		if !ok {
+			return // the guide already explained why it stopped
+		}
+		writeConfig(*out, body)
+		return
+	}
+
 	body := exampleConfig
 	if *minimal {
 		body = minimalConfig
 	}
-	if err := os.WriteFile(*out, []byte(body), 0o644); err != nil {
+	writeConfig(*out, body)
+}
+
+// writeConfig saves the config and prints the next step.
+func writeConfig(out, body string) {
+	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
 		fatal(err)
 	}
-	fmt.Printf("Wrote config to %s\n", *out)
-	fmt.Println("Edit in_scope and seeds, then run: scanner scan -config " + *out + " -html report.html")
+	fmt.Printf("\nWrote config to %s\n", out)
+	fmt.Println("Next: scanner scan -config " + out + " -html report.html")
 	fmt.Println("Only in_scope and seeds are required — everything else has safe defaults,")
 	fmt.Println("and a useful set of checks turns on automatically.")
+}
+
+// interactiveConfig walks the user through a few questions and returns the
+// generated config body. It returns ok=false (without writing anything) if the
+// user cannot confirm they are authorized to test the target, or aborts.
+func interactiveConfig(in io.Reader, outw io.Writer) (string, bool) {
+	r := bufio.NewReader(in)
+	fmt.Fprintln(outw, "Let's set up a scan. Answers in [brackets] are the defaults — press Enter to accept.")
+	fmt.Fprintln(outw)
+
+	// 1. The primary host.
+	host := ""
+	for host == "" {
+		host = sanitizeHost(ask(r, outw, "What host are you allowed to test? (e.g. example.com)", ""))
+		if host == "" {
+			fmt.Fprintln(outw, "  Please enter a host, or press Ctrl-C to quit.")
+		}
+	}
+
+	// 2. Authorization confirmation — this is the one gate.
+	if !askYesNo(r, outw, "Do you have explicit permission to test "+host+"?", false) {
+		fmt.Fprintln(outw, "\nStopping. Only scan hosts you own or are authorized to test (for example,")
+		fmt.Fprintln(outw, "a bug bounty program's in-scope assets). Nothing was written.")
+		return "", false
+	}
+
+	// 3. Subdomains.
+	wildcard := askYesNo(r, outw, "Include all of its subdomains (api."+host+", etc.)?", true)
+
+	// 4. Extra hosts.
+	extra := ask(r, outw, "Any other hosts you may test? (comma-separated, or blank)", "")
+
+	// 5. Seed URL.
+	seed := ask(r, outw, "Which page should it start from?", "https://"+host+"/")
+
+	// 6. Mode.
+	mode := ""
+	for {
+		mode = strings.ToLower(ask(r, outw, "Scan intensity — passive (look only), safe, or aggressive?", "safe"))
+		if mode == config.ModePassive || mode == config.ModeSafe || mode == config.ModeAggressive {
+			break
+		}
+		fmt.Fprintln(outw, "  Please type passive, safe, or aggressive.")
+	}
+
+	// Build the scope list.
+	var scope []string
+	scope = append(scope, host)
+	if wildcard {
+		scope = append(scope, "*."+host)
+	}
+	for _, h := range strings.Split(extra, ",") {
+		if s := sanitizeHost(h); s != "" {
+			scope = append(scope, s)
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# asfasf-scanner config (created by: scanner init -interactive)\n")
+	fmt.Fprintf(&b, "#\n# Authorized use only. Only scan hosts you own or are permitted to test.\n")
+	fmt.Fprintf(&b, "# Only in_scope and seeds are required; a useful set of checks turns on\n")
+	fmt.Fprintf(&b, "# automatically. Run 'scanner init' for a fully-documented config.\n\n")
+	fmt.Fprintf(&b, "mode: %s\n\n", mode)
+	fmt.Fprintf(&b, "scope:\n  in_scope:\n")
+	for _, h := range scope {
+		fmt.Fprintf(&b, "    - %q\n", h)
+	}
+	fmt.Fprintf(&b, "\nseeds:\n    - %q\n", seed)
+
+	// Echo a short summary.
+	fmt.Fprintln(outw, "\nHere's what I'll write:")
+	fmt.Fprintf(outw, "  Mode:     %s\n", mode)
+	fmt.Fprintf(outw, "  In scope: %s\n", strings.Join(scope, ", "))
+	fmt.Fprintf(outw, "  Start at: %s\n", seed)
+	return b.String(), true
+}
+
+// ask prints a prompt (with an optional default) and returns the trimmed line.
+func ask(r *bufio.Reader, outw io.Writer, prompt, def string) string {
+	if def != "" {
+		fmt.Fprintf(outw, "%s [%s]: ", prompt, def)
+	} else {
+		fmt.Fprintf(outw, "%s: ", prompt)
+	}
+	line, err := r.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return def
+	}
+	if err != nil && err != io.EOF {
+		return def
+	}
+	return line
+}
+
+// askYesNo prompts for a yes/no answer, returning def on blank input or EOF.
+func askYesNo(r *bufio.Reader, outw io.Writer, prompt string, def bool) bool {
+	hint := "y/N"
+	if def {
+		hint = "Y/n"
+	}
+	for {
+		fmt.Fprintf(outw, "%s (%s): ", prompt, hint)
+		line, err := r.ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return true
+		case "n", "no":
+			return false
+		case "":
+			return def // blank or EOF -> default
+		}
+		if err != nil {
+			return def
+		}
+	}
+}
+
+// sanitizeHost strips a pasted scheme/path and lower-cases a host.
+func sanitizeHost(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "https://")
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.ToLower(s)
 }
 
 func printSummary(rep *engine.Report) {
