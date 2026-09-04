@@ -199,6 +199,7 @@ func printSummary(rep *engine.Report) {
 	fmt.Printf(" Mode:            %s\n", rep.Mode)
 	fmt.Printf(" Duration:        %s\n", rep.FinishedAt.Sub(rep.StartedAt).Round(1e6))
 	fmt.Printf(" Pages crawled:   %d\n", rep.PagesCrawled)
+	fmt.Printf(" Origins scanned: %d\n", rep.OriginsScanned)
 	fmt.Printf(" Endpoints:       %d\n", len(rep.Endpoints))
 	fmt.Printf(" Requests sent:   %d\n", rep.RequestsSent)
 	fmt.Printf(" Out-of-scope blocked: %d\n", rep.Blocked)

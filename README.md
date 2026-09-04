@@ -3,8 +3,8 @@
 A scope-enforced web vulnerability scanner for **authorized** security testing,
 such as bug bounty programs where you have explicit permission to test the
 in-scope assets. It crawls a target, discovers request endpoints and
-parameters, fingerprints the technology stack, and probes for reflected XSS
-and SQL injection. Results are available as a CLI summary, a JSON report, an
+parameters, fingerprints the technology stack, and runs a suite of injection
+and exposure checks. Results are available as a CLI summary, a JSON report, an
 HTML report, and a local web dashboard.
 
 > ⚠️ **Authorized use only.** Only run this against systems you own or are
@@ -19,22 +19,47 @@ HTML report, and a local web dashboard.
   and again in the shared HTTP client, so a bug in a check can never reach an
   unauthorized host.
 - **Intensity modes** so you can match a program's rules:
-  - `passive` — crawl, discover, and fingerprint only. **No payloads are ever
-    sent.** Use this where active/automated testing is disallowed.
-  - `safe` (default) — one non-destructive probe per parameter per check.
-  - `aggressive` — extra payload variants for higher coverage. Still no
-    time-based or denial-of-service payloads.
-- **Recon & discovery** — breadth-first crawl with depth/page limits, link and
-  HTML-form parameter discovery, and signature-based tech fingerprinting.
-- **Injection checks**
-  - Reflected XSS via uniquely-tagged HTML breakout markers (multiple contexts
-    in aggressive mode).
-  - SQL injection: error-based, boolean-based, and an **opt-in** bounded
-    time-based blind probe (single short delay with a zero-delay control to
-    rule out jitter — a detection probe, not a load test).
+  - `passive` — crawl, discover, fingerprint, and CVE-map only. **No payloads
+    or path-probing requests are ever sent.** Use this where active/automated
+    testing is disallowed.
+  - `safe` (default) — one non-destructive probe per parameter per check, plus
+    the site checks.
+  - `aggressive` — extra payload variants and larger path lists for higher
+    coverage. Still no time-based-by-default or denial-of-service payloads.
 - **Global rate limiting** and bounded concurrency to stay polite.
 - **Reports**: CLI summary, JSON, self-contained HTML, and a localhost web
   dashboard with a re-scan button.
+
+### Checks
+
+| Check | Type | What it does | Gated by |
+|-------|------|--------------|----------|
+| **Recon & discovery** | passive | BFS crawl with depth/page limits, link + form parameter discovery, tech fingerprinting | always |
+| **CVE fingerprint** | passive | Maps detected software + versions to a built-in table of known CVEs; sends no extra requests | `cve_fingerprint` |
+| **Reflected XSS** | active | Uniquely-tagged HTML breakout markers, multiple contexts in aggressive mode | `xss` |
+| **SQL injection** | active | Error-based, boolean-based, and opt-in bounded time-based blind | `sqli` (+ `sqli_time_based`) |
+| **SQL dumper** | exploit | Bounded proof-of-impact extraction on **firmly-confirmed** SQLi: version, user, database, table/column enumeration, and an optional tiny row sample | `sql_dump` |
+| **Config exposure** | active | `.env`, `.git/config`, source/config backups, `phpinfo`, SQL dumps — matched by file-specific signatures | `config_exposure` |
+| **Admin panel finder** | active | Common admin/login panels, gated on password fields, panel signatures, or auth challenges | `admin_panel` |
+| **CMS fingerprint** | active | WordPress / Joomla / Drupal / Magento, with version where available | `cms_fingerprint` |
+| **Shell exposure** | active | Detects an **already-exposed** web shell / backdoor (a sign of compromise) by known shell signatures | `shell_exposure` |
+| **Subdomain takeover** | active | Resolves CNAMEs and matches dangling-service takeover fingerprints (GitHub Pages, S3, Heroku, Fastly, Shopify, …) | `subdomain_takeover` |
+
+All active checks are skipped in `passive` mode. Site checks run once per
+in-scope origin; injection checks run per discovered parameter.
+
+### The SQL dumper and data minimization
+
+The SQL dumper proves the impact of a confirmed injection the way `sqlmap`
+does under an authorized engagement, but it is deliberately **data-minimizing**:
+
+- It defaults to **metadata only** (version, current user, current database,
+  and bounded table/column names).
+- It reads actual **row data only when `dump.sample_data: true`**, and never
+  more than `dump.max_rows` rows, clearly marked as a truncated sample.
+
+Extract no more than you need to demonstrate the finding, and follow the
+program's data-handling rules.
 
 ### Explicitly out of scope
 
@@ -96,6 +121,23 @@ checks:
   sqli: true
   sqli_time_based: false   # opt-in bounded blind probe
   sqli_delay_seconds: 3    # clamped to 1..10
+
+  config_exposure: true    # .env, .git/config, backups, phpinfo
+  admin_panel: true        # admin/login panels
+  cms_fingerprint: true    # WordPress / Joomla / Drupal / Magento
+  shell_exposure: true     # already-exposed web shell (compromise)
+  subdomain_takeover: true # dangling DNS -> unclaimed service
+  cve_fingerprint: true    # version -> known CVEs (no extra requests)
+  sql_dump: false          # bounded extraction on confirmed SQLi (opt-in)
+
+dump:                      # only used when sql_dump is true
+  max_tables: 20
+  max_columns: 20
+  max_rows: 5
+  sample_data: false       # true reads at most max_rows rows (bounded)
+
+takeover:
+  extra_subdomains: []     # extra in-scope hosts to check for takeover
 ```
 
 Every seed must itself fall inside `scope.in_scope`, or the scanner refuses to
@@ -114,18 +156,25 @@ Common flags: `-config <file>` (required for scan/serve), `-mode`, `-quiet`.
 ## Architecture
 
 ```
-cmd/scanner            CLI (scan / serve / init)
-internal/config        scope config loading + validation (scope is mandatory)
-internal/scope         host allow/deny matcher (wildcards, out-of-scope wins)
-internal/httpclient    shared rate-limited, scope-checked HTTP client
-internal/crawler       BFS crawl + link/form/parameter discovery
-internal/fingerprint   tech + version-disclosure detection
-internal/checks        shared Finding / Endpoint types
-internal/checks/xss    reflected XSS check
-internal/checks/sqli   error / boolean / time-based SQLi checks
-internal/engine        orchestration -> Report
-internal/report        JSON + HTML rendering
-internal/dashboard     localhost web UI
+cmd/scanner                   CLI (scan / serve / init)
+internal/config               scope config loading + validation (scope is mandatory)
+internal/scope                host allow/deny matcher (wildcards, out-of-scope wins)
+internal/httpclient           shared rate-limited, scope-checked HTTP client
+internal/crawler              BFS crawl + link/form/parameter discovery
+internal/fingerprint          tech + version detection -> Detection records
+internal/checks               shared Finding / Endpoint / Detection types
+internal/checks/xss           reflected XSS check
+internal/checks/sqli          error / boolean / time-based SQLi checks
+internal/checks/sqldumper     bounded SQL data extraction (exploit)
+internal/checks/configexp     sensitive file / config exposure
+internal/checks/adminpanel    admin panel / login finder
+internal/checks/cmsfp         CMS fingerprint
+internal/checks/shellexp      exposed web-shell detection
+internal/checks/subtakeover   subdomain takeover (DNS + body fingerprints)
+internal/checks/cve           version -> known-CVE mapping
+internal/engine               orchestration (crawl -> fingerprint/CVE -> site + injection) -> Report
+internal/report               JSON + HTML rendering
+internal/dashboard            localhost web UI
 ```
 
 ## Notes on accuracy

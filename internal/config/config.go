@@ -26,12 +26,14 @@ type Config struct {
 	//   "aggressive" - safe work plus additional payload variants per
 	//                  parameter for higher coverage. Still no time-based
 	//                  or denial-of-service payloads.
-	Mode  string   `yaml:"mode"`
-	Scope Scope    `yaml:"scope"`
-	Seeds []string `yaml:"seeds"`
-	Crawl Crawl    `yaml:"crawl"`
-	HTTP  HTTP     `yaml:"http"`
-	Check Checks   `yaml:"checks"`
+	Mode     string   `yaml:"mode"`
+	Scope    Scope    `yaml:"scope"`
+	Seeds    []string `yaml:"seeds"`
+	Crawl    Crawl    `yaml:"crawl"`
+	HTTP     HTTP     `yaml:"http"`
+	Check    Checks   `yaml:"checks"`
+	Dump     Dump     `yaml:"dump"`
+	Takeover Takeover `yaml:"takeover"`
 }
 
 // Scan modes.
@@ -87,6 +89,42 @@ type Checks struct {
 	// SQLiDelaySeconds is the delay used by the time-based probe. It is
 	// clamped to the range [1, 10] to keep the probe bounded.
 	SQLiDelaySeconds int `yaml:"sqli_delay_seconds"`
+
+	// Site-level checks. These probe an origin with small path lists and
+	// tight content signatures. They send requests the crawl did not
+	// discover, so they are treated as active and are skipped in passive
+	// mode.
+	AdminPanel        bool `yaml:"admin_panel"`
+	ConfigExposure    bool `yaml:"config_exposure"`
+	ShellExposure     bool `yaml:"shell_exposure"`
+	CMSFingerprint    bool `yaml:"cms_fingerprint"`
+	SubdomainTakeover bool `yaml:"subdomain_takeover"`
+
+	// CVEFingerprint maps detected software versions to known CVEs. It sends
+	// no extra requests and runs in every mode (including passive).
+	CVEFingerprint bool `yaml:"cve_fingerprint"`
+
+	// SQLDump enables the bounded SQL data extractor against endpoints where
+	// SQL injection was firmly confirmed. It is an explicit opt-in on top of
+	// an active mode. Off by default. See Dump for its bounds.
+	SQLDump bool `yaml:"sql_dump"`
+}
+
+// Dump bounds the SQL data extractor (used only when checks.sql_dump is on).
+// It defaults to metadata-only extraction; row data is read only when
+// SampleData is true, and never more than MaxRows.
+type Dump struct {
+	MaxTables  int  `yaml:"max_tables"`
+	MaxColumns int  `yaml:"max_columns"`
+	MaxRows    int  `yaml:"max_rows"`
+	SampleData bool `yaml:"sample_data"`
+}
+
+// Takeover configures the subdomain-takeover check.
+type Takeover struct {
+	// ExtraSubdomains are additional hostnames to check for takeover beyond
+	// the crawled origins. Each must fall within scope or it is ignored.
+	ExtraSubdomains []string `yaml:"extra_subdomains"`
 }
 
 // Load reads, parses, applies defaults to, and validates a config file.
@@ -138,6 +176,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Check.SQLiDelaySeconds > 10 {
 		c.Check.SQLiDelaySeconds = 10
+	}
+	if c.Dump.MaxTables <= 0 {
+		c.Dump.MaxTables = 20
+	}
+	if c.Dump.MaxColumns <= 0 {
+		c.Dump.MaxColumns = 20
+	}
+	if c.Dump.MaxRows <= 0 {
+		c.Dump.MaxRows = 5
 	}
 }
 
