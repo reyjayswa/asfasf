@@ -56,7 +56,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `%s
 
 Usage:
-  scanner scan  -config <file> [-json out.json] [-html out.html] [-mode passive|safe|aggressive] [-quiet]
+  scanner scan  -config <file> [-json out] [-html out] [-sarif out] [-md out]
+                [-mode passive|safe|aggressive] [-headless] [-oob]
+                [-baseline prev.json] [-quiet]
   scanner serve -config <file> [-addr 127.0.0.1:8080] [-mode ...] [-no-scan]
   scanner init  [-o scope.yaml] [-interactive] [-minimal]
 
