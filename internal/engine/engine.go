@@ -21,20 +21,24 @@ import (
 	"github.com/reyjayswa/asfasf/internal/checks/cors"
 	"github.com/reyjayswa/asfasf/internal/checks/csrf"
 	"github.com/reyjayswa/asfasf/internal/checks/cve"
+	"github.com/reyjayswa/asfasf/internal/checks/headerinj"
 	"github.com/reyjayswa/asfasf/internal/checks/openredirect"
 	"github.com/reyjayswa/asfasf/internal/checks/pathtraversal"
 	"github.com/reyjayswa/asfasf/internal/checks/secheaders"
 	"github.com/reyjayswa/asfasf/internal/checks/shellexp"
 	"github.com/reyjayswa/asfasf/internal/checks/sqldumper"
 	"github.com/reyjayswa/asfasf/internal/checks/sqli"
+	"github.com/reyjayswa/asfasf/internal/checks/ssrf"
 	"github.com/reyjayswa/asfasf/internal/checks/ssti"
 	"github.com/reyjayswa/asfasf/internal/checks/subtakeover"
 	"github.com/reyjayswa/asfasf/internal/checks/xss"
 	"github.com/reyjayswa/asfasf/internal/config"
 	"github.com/reyjayswa/asfasf/internal/crawler"
+	"github.com/reyjayswa/asfasf/internal/discovery"
 	"github.com/reyjayswa/asfasf/internal/enrich"
 	"github.com/reyjayswa/asfasf/internal/fingerprint"
 	"github.com/reyjayswa/asfasf/internal/httpclient"
+	"github.com/reyjayswa/asfasf/internal/oob"
 	"github.com/reyjayswa/asfasf/internal/scope"
 )
 
@@ -128,6 +132,28 @@ func (e *Engine) Run(ctx context.Context) *Report {
 	rep.OriginsScanned = len(origins)
 	endpoints := cr.Endpoints
 
+	// Recon discovery: robots.txt, sitemap.xml, and JS endpoint mining.
+	if e.cfg.ActiveChecks() && e.cfg.Check.Discovery {
+		if extra := discovery.Discover(ctx, e.client, e.scope, origins, cr.Pages); len(extra) > 0 {
+			endpoints = mergeEndpoints(endpoints, extra)
+			e.log("discovery (robots/sitemap/js) added %d endpoint(s)", len(extra))
+		}
+	}
+
+	// Out-of-band interaction server for blind checks (SSRF).
+	var oobSrv *oob.Server
+	if e.cfg.ActiveChecks() && e.cfg.Check.SSRF && e.cfg.OOB.Enabled {
+		s, err := oob.New(e.cfg.OOB.ListenAddr, e.cfg.OOB.CallbackBase)
+		if err == nil {
+			s.Start(ctx)
+			oobSrv = s
+			defer s.Close()
+			e.log("out-of-band listener started; callback base %s", s.CallbackBase())
+		} else {
+			e.log("SSRF requested but the out-of-band listener failed: %v", err)
+		}
+	}
+
 	// Optional headless-browser stage: render JS apps to discover extra routes.
 	var b *browser.Browser
 	if e.cfg.ActiveChecks() && e.cfg.Headless.Enabled {
@@ -164,7 +190,7 @@ func (e *Engine) Run(ctx context.Context) *Report {
 
 	if e.cfg.ActiveChecks() {
 		findings = append(findings, e.runSiteChecks(ctx, origins)...)
-		findings = append(findings, e.runEndpointChecks(ctx, endpoints)...)
+		findings = append(findings, e.runEndpointChecks(ctx, endpoints, oobSrv)...)
 		if b != nil {
 			findings = append(findings, e.runDOMXSS(ctx, b, endpoints)...)
 		}
@@ -253,6 +279,9 @@ func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.F
 	if e.cfg.Check.CORS {
 		general = append(general, cors.New(e.client, aggressive))
 	}
+	if e.cfg.Check.HeaderInjection {
+		general = append(general, headerinj.New(e.client, aggressive))
+	}
 
 	var jobs []siteJob
 	for _, o := range origins {
@@ -295,7 +324,7 @@ func (e *Engine) runSiteChecks(ctx context.Context, origins []string) []checks.F
 
 // runEndpointChecks probes every parameterized endpoint with the enabled
 // injection checks, escalating firm SQLi to the bounded dumper.
-func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpoint) []checks.Finding {
+func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpoint, oobSrv *oob.Server) []checks.Finding {
 	aggr := e.cfg.Aggressive()
 	var generic []endpointChecker
 	if e.cfg.Check.XSS {
@@ -312,6 +341,9 @@ func (e *Engine) runEndpointChecks(ctx context.Context, endpoints []checks.Endpo
 	}
 	if e.cfg.Check.SSTI {
 		generic = append(generic, ssti.New(e.client, aggr))
+	}
+	if oobSrv != nil {
+		generic = append(generic, ssrf.New(e.client, oobSrv, aggr))
 	}
 	var sqliChk *sqli.Checker
 	var dumper *sqldumper.Checker

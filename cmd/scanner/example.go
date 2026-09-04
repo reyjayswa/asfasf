@@ -107,6 +107,13 @@ checks:
   cookies: true           # missing Secure/HttpOnly/SameSite
   csrf: true              # state-changing forms lacking an anti-CSRF token
 
+  header_injection: true  # host-header injection + reflected request headers
+  discovery: true         # robots.txt + sitemap.xml + JS endpoint mining
+
+  # SSRF via out-of-band interaction. Off by default: it needs a callback
+  # address the target can reach (see the oob block). Enable per run with -oob.
+  ssrf: false
+
 dump:
   max_tables: 20
   max_columns: 20
@@ -127,4 +134,12 @@ headless:
   enabled: false
   max_urls: 25             # cap how many URLs are rendered
   timeout_seconds: 20      # per-page render timeout
+
+# Out-of-band interaction server for blind SSRF (checks.ssrf). The listener
+# runs locally; for a real engagement set callback_base to a URL the TARGET can
+# reach (a public host/tunnel), not localhost. Enable per run with -oob.
+oob:
+  enabled: false
+  listen_addr: "127.0.0.1:0"   # local bind (0 = random port)
+  callback_base: ""            # e.g. "http://your-public-host:9000"; empty = derive from listen_addr
 `

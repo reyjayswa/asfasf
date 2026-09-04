@@ -1,0 +1,45 @@
+# Build and test the scanner, and (optionally) run an authorized scan and
+# upload the results to GitHub code scanning as SARIF.
+#
+# The scan step only runs if a scope config exists at .scanner/scope.yaml.
+# Only ever point it at assets you are authorized to test.
+name: security-scan
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Build
+        run: go build -o scanner ./cmd/scanner
+      - name: Test
+        run: go test ./...
+
+      - name: Run scan (if a scope config is present)
+        id: scan
+        run: |
+          if [ -f .scanner/scope.yaml ]; then
+            ./scanner scan -config .scanner/scope.yaml -sarif results.sarif -quiet || true
+            echo "ran=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No .scanner/scope.yaml; skipping scan." 
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload SARIF to code scanning
+        if: steps.scan.outputs.ran == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

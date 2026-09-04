@@ -35,6 +35,7 @@ type Config struct {
 	Dump     Dump     `yaml:"dump"`
 	Takeover Takeover `yaml:"takeover"`
 	Headless Headless `yaml:"headless"`
+	OOB      OOB      `yaml:"oob"`
 }
 
 // Scan modes.
@@ -124,6 +125,27 @@ type Checks struct {
 	SecurityHeaders bool `yaml:"security_headers"`
 	Cookies         bool `yaml:"cookies"`
 	CSRF            bool `yaml:"csrf"`
+
+	// HeaderInjection probes request headers (host-routing and reflected).
+	HeaderInjection bool `yaml:"header_injection"`
+
+	// Discovery widens coverage via robots.txt, sitemap.xml, and JS mining.
+	Discovery bool `yaml:"discovery"`
+
+	// SSRF uses out-of-band interaction to detect server-side request forgery.
+	// Requires oob.enabled and a callback address the target can reach, so it
+	// is an explicit opt-in.
+	SSRF bool `yaml:"ssrf"`
+}
+
+// OOB configures the out-of-band interaction server used by blind checks
+// (SSRF). The listener runs locally; callback_base is the URL the target
+// should reach — for a real engagement this must be an address reachable from
+// the target, not localhost.
+type OOB struct {
+	Enabled      bool   `yaml:"enabled"`
+	ListenAddr   string `yaml:"listen_addr"`
+	CallbackBase string `yaml:"callback_base"`
 }
 
 // Headless configures the optional headless-browser stage, which renders
@@ -229,7 +251,7 @@ func (c *Config) anyCheckEnabled() bool {
 		ch.ShellExposure || ch.CMSFingerprint || ch.SubdomainTakeover ||
 		ch.CVEFingerprint || ch.SQLDump || ch.OpenRedirect || ch.PathTraversal ||
 		ch.CommandInjection || ch.SSTI || ch.CORS || ch.SecurityHeaders ||
-		ch.Cookies || ch.CSRF
+		ch.Cookies || ch.CSRF || ch.HeaderInjection || ch.Discovery || ch.SSRF
 }
 
 // applyCheckDefaults turns on the full check set when no checks were enabled,
@@ -262,7 +284,10 @@ func (c *Config) applyCheckDefaults() {
 	c.Check.SecurityHeaders = true
 	c.Check.Cookies = true
 	c.Check.CSRF = true
-	// Headless stays opt-in (slow, launches a browser): not enabled here.
+	c.Check.HeaderInjection = true
+	c.Check.Discovery = true
+	// Headless (browser) and SSRF (needs a reachable out-of-band callback)
+	// stay opt-in: not enabled here.
 }
 
 // validate enforces the scope guardrails and basic sanity limits.

@@ -110,8 +110,10 @@ func runScan(args []string) {
 	htmlOut := fs.String("html", "", "write HTML report to this path")
 	sarifOut := fs.String("sarif", "", "write SARIF 2.1.0 report to this path (for CI)")
 	mdOut := fs.String("md", "", "write a Markdown report to this path")
+	baseline := fs.String("baseline", "", "previous JSON report; report only findings not in it (diff mode)")
 	mode := fs.String("mode", "", "override scan mode: passive|safe|aggressive")
 	headless := fs.Bool("headless", false, "enable headless-browser scanning (JS render + DOM XSS)")
+	oob := fs.Bool("oob", false, "enable out-of-band SSRF detection (starts a local callback listener)")
 	quiet := fs.Bool("quiet", false, "suppress progress output")
 	fs.Parse(args)
 
@@ -127,12 +129,16 @@ func runScan(args []string) {
 	if *headless {
 		cfg.Headless.Enabled = true
 	}
-	executeScan(cfg, outputs{json: *jsonOut, html: *htmlOut, sarif: *sarifOut, md: *mdOut}, *quiet)
+	if *oob {
+		cfg.OOB.Enabled = true
+		cfg.Check.SSRF = true
+	}
+	executeScan(cfg, outputs{json: *jsonOut, html: *htmlOut, sarif: *sarifOut, md: *mdOut, baseline: *baseline}, *quiet)
 }
 
 // outputs names the report files a scan should write.
 type outputs struct {
-	json, html, sarif, md string
+	json, html, sarif, md, baseline string
 }
 
 // executeScan builds the engine, runs the scan, prints the summary, and writes
@@ -146,6 +152,15 @@ func executeScan(cfg *config.Config, out outputs, quiet bool) {
 	defer cancel()
 
 	rep := eng.Run(ctx)
+
+	if out.baseline != "" {
+		removed, err := report.FilterToNew(rep, out.baseline)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "[*] diff mode: %d finding(s) already in baseline hidden\n", removed)
+	}
+
 	printSummary(rep)
 
 	if out.json != "" {

@@ -63,6 +63,9 @@ HTML report, and a local web dashboard.
 | **Cookie flags** | passive | Missing Secure / HttpOnly / SameSite | `cookies` |
 | **CSRF** | passive | State-changing forms with no anti-CSRF token | `csrf` |
 | **DOM-based XSS** | headless | Executes payloads in a real browser to catch client-side sinks (innerHTML, eval, location) | `headless.enabled` |
+| **Header injection** | active | Host-header injection (redirect/cache poisoning) and reflected request headers | `header_injection` |
+| **Recon discovery** | active | Mines robots.txt, sitemap.xml, and referenced JS for extra parameterized endpoints | `discovery` |
+| **SSRF (blind)** | out-of-band | Confirms server-side request forgery via a callback listener — no visible response needed | `ssrf` + `oob.enabled` |
 
 All non-headless checks are **on by default** (a minimal config with no
 `checks` block runs every one), including the time-based blind SQLi probe and
@@ -85,6 +88,24 @@ does under an authorized engagement:
 
 Extract no more than you need to demonstrate the finding, and follow the
 program's data-handling rules.
+
+### Coverage vs. safeguards
+
+The safeguards do not hide findings on an authorized target. Scope enforcement
+only blocks hosts you did not list — it never suppresses a result within your
+scope. The limits that affect how much a scan finds are all tunable without
+weakening safety: raise `http.rate_per_second` / `crawl.max_pages` /
+`crawl.max_depth` for reach, use `aggressive` for more payloads, and enable
+`headless` and `ssrf` for surfaces the plain HTTP checks can't see. Adaptive
+rate limiting only slows down when the target returns HTTP 429.
+
+### Continuous scanning
+
+- `-baseline previous.json` reports only findings that are **not** already in a
+  prior JSON report (diff mode), so scheduled scans surface only what's new.
+- `.github/workflows/scan.yml` builds, tests, runs a scan when
+  `.scanner/scope.yaml` is present, and uploads the SARIF to GitHub code
+  scanning.
 
 ### Explicitly out of scope
 
@@ -197,7 +218,7 @@ start. The `mode` in the file can be overridden per run with `-mode`.
 
 | Command | Purpose |
 |---------|---------|
-| `scan`  | Run a scan; write `-json` / `-html` / `-sarif` / `-md` reports; `-headless` enables browser scanning; print a summary. |
+| `scan`  | Run a scan; write `-json` / `-html` / `-sarif` / `-md` reports; `-headless` (browser) and `-oob` (blind SSRF) enable extra stages; `-baseline` shows only new findings. |
 | `serve` | Run a scan and serve an HTML dashboard on `-addr` (localhost by default), with a re-scan button and a `/report.json` endpoint. |
 | `init`  | Write a config. `-interactive` (or `-i`) asks a few questions, builds it for you, and offers to run the scan immediately; `-minimal` writes a short starter (scope + seeds only); otherwise a fully-documented one. |
 
@@ -224,12 +245,16 @@ internal/checks/cors          CORS misconfiguration
 internal/checks/secheaders    missing/weak security headers (passive)
 internal/checks/cookies       insecure cookie flags (passive)
 internal/checks/csrf          missing anti-CSRF token (passive)
+internal/checks/headerinj     host-header injection + reflected headers
+internal/checks/ssrf          blind SSRF via out-of-band interaction
 internal/checks/configexp     sensitive file / config exposure
 internal/checks/adminpanel    admin panel / login finder
 internal/checks/cmsfp         CMS fingerprint
 internal/checks/shellexp      exposed web-shell detection
 internal/checks/subtakeover   subdomain takeover (DNS + body fingerprints)
 internal/checks/cve           version -> known-CVE mapping
+internal/discovery            robots.txt / sitemap.xml / JS endpoint mining
+internal/oob                  out-of-band interaction listener (blind checks)
 internal/browser              headless Chromium (chromedp): JS render, SPA discovery, DOM-XSS
 internal/enrich               CWE / OWASP / score annotation
 internal/engine               orchestration (crawl -> fingerprint/CVE -> headless -> site + injection) -> Report
