@@ -1,5 +1,27 @@
 package main
 
+// minimalConfig is written by "scanner init -minimal". It contains only the
+// two things a beginner must set. Everything else uses safe defaults, and a
+// useful set of checks turns on automatically.
+const minimalConfig = `# asfasf-scanner — minimal config
+#
+# Only these two things are required:
+#   in_scope : the hosts you are ALLOWED to test
+#   seeds    : where to start scanning
+# Everything else has safe defaults, and a useful set of checks turns on
+# automatically. Only scan targets you own or are permitted to test.
+
+mode: safe                 # passive | safe | aggressive
+
+scope:
+  in_scope:
+    - "example.com"        # exact host you may test
+    - "*.example.com"      # ...and any of its subdomains (optional)
+
+seeds:
+  - "https://example.com/" # the page to start from
+`
+
 // exampleConfig is written by "scanner init". It documents every option and
 // ships conservative defaults with a clearly-fake scope the user must edit.
 const exampleConfig = `# asfasf-scanner configuration
@@ -7,14 +29,19 @@ const exampleConfig = `# asfasf-scanner configuration
 # SCOPE IS MANDATORY. The scanner will not send a request to any host that is
 # not matched by scope.in_scope, and out_of_scope always wins. Only list
 # assets you own or are explicitly authorized to test.
+#
+# NEW HERE? You only need to fill in "in_scope" and "seeds" below. Every other
+# setting has a safe default, and if you delete the whole "checks" block a
+# useful set of checks turns on automatically.
 
 # Scan intensity:
-#   passive    - crawl, discover, and fingerprint only; never sends payloads.
-#                Use when a program forbids active/automated testing.
-#   safe       - passive work plus one non-destructive probe per parameter
-#                for each enabled check (default).
-#   aggressive - safe work plus extra payload variants for more coverage.
-#                Still no time-based or denial-of-service payloads.
+#   passive    - crawl, discover, fingerprint, and CVE-map only; never sends
+#                payloads or path-probing requests. Use when a program forbids
+#                active/automated testing.
+#   safe       - passive work plus one non-destructive probe per parameter and
+#                the site checks below (default).
+#   aggressive - safe work plus extra payload variants and larger path lists.
+#                Still no time-based-by-default or denial-of-service payloads.
 mode: safe
 
 scope:
@@ -40,12 +67,88 @@ http:
   follow_redirect: false
 
 checks:
+  # Parameter injection checks (run per discovered parameter).
   xss: true
   sqli: true
-  # Blind time-based SQLi. Off by default. Sends ONE short, bounded delay
-  # payload per parameter and confirms against a zero-delay control. It is a
-  # detection probe, not a load or denial-of-service test. Enable only where
-  # the program permits active blind testing.
-  sqli_time_based: false
+  # Blind time-based SQLi. Sends ONE short, bounded delay payload per parameter
+  # and confirms against a zero-delay control. It is a detection probe, not a
+  # load or denial-of-service test. Set to false if a program forbids it.
+  sqli_time_based: true
   sqli_delay_seconds: 3    # clamped to 1..10
+
+  # Site checks (run once per in-scope origin). These send path-probing
+  # requests, so they are skipped in passive mode.
+  config_exposure: true    # .env, .git/config, backups, phpinfo, etc.
+  admin_panel: true        # common admin/login panels
+  cms_fingerprint: true    # WordPress / Joomla / Drupal / Magento
+  shell_exposure: true     # detect an already-exposed web shell (compromise)
+  subdomain_takeover: true # dangling DNS -> unclaimed service
+
+  # CVE mapping over fingerprinted software versions. Sends no extra requests;
+  # runs in every mode including passive.
+  cve_fingerprint: true
+
+  # Bounded SQL data extraction against endpoints with FIRMLY-confirmed SQLi.
+  # Extracts metadata and schema (table/column names) only, unless
+  # dump.sample_data is turned on below. Set to false if a program forbids it.
+  sql_dump: true
+
+  # Additional injection/logic checks (active, over parameters).
+  open_redirect: true
+  path_traversal: true
+  command_injection: true
+  ssti: true              # server-side template injection
+
+  # CORS misconfiguration (active, per origin).
+  cors: true
+
+  # Passive analyzers over already-fetched responses (no extra requests).
+  security_headers: true  # missing/weak CSP, HSTS, X-Frame-Options, etc.
+  cookies: true           # missing Secure/HttpOnly/SameSite
+  csrf: true              # state-changing forms lacking an anti-CSRF token
+
+  header_injection: true  # host-header injection + reflected request headers
+  discovery: true         # robots.txt + sitemap.xml + JS endpoint mining
+
+  graphql: true           # GraphQL introspection exposure
+  crlf: true              # CRLF / response header injection
+  xxe: true               # XML external entity (in-band file read)
+  xpath: true             # XPath injection
+  nosql: true             # NoSQL (MongoDB) injection
+  jwt: true               # exposed / weak (alg=none) JSON Web Tokens
+  secrets: true           # leaked API keys / private keys in responses
+  directory_listing: true # autoindex / directory listing enabled
+
+  # SSRF via out-of-band interaction. Off by default: it needs a callback
+  # address the target can reach (see the oob block). Enable per run with -oob.
+  ssrf: false
+
+dump:
+  max_tables: 20
+  max_columns: 20
+  max_rows: 5
+  # Reads ACTUAL ROW VALUES (up to max_rows per sampled table). This may be
+  # prohibited by a program's data-handling rules. Set to false to prove impact
+  # from metadata and schema only.
+  sample_data: true
+
+takeover:
+  extra_subdomains: []     # optional extra in-scope hosts to check for takeover
+
+# Headless-browser stage: renders JavaScript apps with Chromium to discover
+# DOM-built routes and detect DOM-based XSS the HTML crawler cannot. It is much
+# slower (launches a browser) so it is OFF by default; enable per run with the
+# -headless flag or here. Requires a Chromium binary on the machine.
+headless:
+  enabled: false
+  max_urls: 25             # cap how many URLs are rendered
+  timeout_seconds: 20      # per-page render timeout
+
+# Out-of-band interaction server for blind SSRF (checks.ssrf). The listener
+# runs locally; for a real engagement set callback_base to a URL the TARGET can
+# reach (a public host/tunnel), not localhost. Enable per run with -oob.
+oob:
+  enabled: false
+  listen_addr: "127.0.0.1:0"   # local bind (0 = random port)
+  callback_base: ""            # e.g. "http://your-public-host:9000"; empty = derive from listen_addr
 `

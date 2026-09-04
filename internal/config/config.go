@@ -26,12 +26,16 @@ type Config struct {
 	//   "aggressive" - safe work plus additional payload variants per
 	//                  parameter for higher coverage. Still no time-based
 	//                  or denial-of-service payloads.
-	Mode  string   `yaml:"mode"`
-	Scope Scope    `yaml:"scope"`
-	Seeds []string `yaml:"seeds"`
-	Crawl Crawl    `yaml:"crawl"`
-	HTTP  HTTP     `yaml:"http"`
-	Check Checks   `yaml:"checks"`
+	Mode     string   `yaml:"mode"`
+	Scope    Scope    `yaml:"scope"`
+	Seeds    []string `yaml:"seeds"`
+	Crawl    Crawl    `yaml:"crawl"`
+	HTTP     HTTP     `yaml:"http"`
+	Check    Checks   `yaml:"checks"`
+	Dump     Dump     `yaml:"dump"`
+	Takeover Takeover `yaml:"takeover"`
+	Headless Headless `yaml:"headless"`
+	OOB      OOB      `yaml:"oob"`
 }
 
 // Scan modes.
@@ -87,6 +91,102 @@ type Checks struct {
 	// SQLiDelaySeconds is the delay used by the time-based probe. It is
 	// clamped to the range [1, 10] to keep the probe bounded.
 	SQLiDelaySeconds int `yaml:"sqli_delay_seconds"`
+
+	// Site-level checks. These probe an origin with small path lists and
+	// tight content signatures. They send requests the crawl did not
+	// discover, so they are treated as active and are skipped in passive
+	// mode.
+	AdminPanel        bool `yaml:"admin_panel"`
+	ConfigExposure    bool `yaml:"config_exposure"`
+	ShellExposure     bool `yaml:"shell_exposure"`
+	CMSFingerprint    bool `yaml:"cms_fingerprint"`
+	SubdomainTakeover bool `yaml:"subdomain_takeover"`
+
+	// CVEFingerprint maps detected software versions to known CVEs. It sends
+	// no extra requests and runs in every mode (including passive).
+	CVEFingerprint bool `yaml:"cve_fingerprint"`
+
+	// SQLDump enables the bounded SQL data extractor against endpoints where
+	// SQL injection was firmly confirmed. It is an explicit opt-in on top of
+	// an active mode. Off by default. See Dump for its bounds.
+	SQLDump bool `yaml:"sql_dump"`
+
+	// Additional injection/logic checks (active, over parameters).
+	OpenRedirect     bool `yaml:"open_redirect"`
+	PathTraversal    bool `yaml:"path_traversal"`
+	CommandInjection bool `yaml:"command_injection"`
+	SSTI             bool `yaml:"ssti"`
+
+	// CORS misconfiguration (active, per origin).
+	CORS bool `yaml:"cors"`
+
+	// Passive analyzers over already-fetched responses (no extra requests;
+	// run in every mode).
+	SecurityHeaders bool `yaml:"security_headers"`
+	Cookies         bool `yaml:"cookies"`
+	CSRF            bool `yaml:"csrf"`
+
+	// HeaderInjection probes request headers (host-routing and reflected).
+	HeaderInjection bool `yaml:"header_injection"`
+
+	// Discovery widens coverage via robots.txt, sitemap.xml, and JS mining.
+	Discovery bool `yaml:"discovery"`
+
+	// SSRF uses out-of-band interaction to detect server-side request forgery.
+	// Requires oob.enabled and a callback address the target can reach, so it
+	// is an explicit opt-in.
+	SSRF bool `yaml:"ssrf"`
+
+	// GraphQL introspection exposure (active, per origin).
+	GraphQL bool `yaml:"graphql"`
+
+	// More injection checks (active, over parameters).
+	CRLF  bool `yaml:"crlf"`  // CRLF / response header injection
+	XXE   bool `yaml:"xxe"`   // XML external entity (in-band)
+	XPath bool `yaml:"xpath"` // XPath injection
+	NoSQL bool `yaml:"nosql"` // NoSQL (MongoDB) injection
+
+	// Passive analyzers over already-fetched responses (no extra requests).
+	JWT        bool `yaml:"jwt"`               // exposed / weak JSON Web Tokens
+	Secrets    bool `yaml:"secrets"`           // leaked API keys / secrets
+	DirListing bool `yaml:"directory_listing"` // directory listing enabled
+}
+
+// OOB configures the out-of-band interaction server used by blind checks
+// (SSRF). The listener runs locally; callback_base is the URL the target
+// should reach — for a real engagement this must be an address reachable from
+// the target, not localhost.
+type OOB struct {
+	Enabled      bool   `yaml:"enabled"`
+	ListenAddr   string `yaml:"listen_addr"`
+	CallbackBase string `yaml:"callback_base"`
+}
+
+// Headless configures the optional headless-browser stage, which renders
+// JavaScript apps to discover DOM-built routes and detect DOM-based XSS. It
+// launches Chromium and is much slower than HTTP checks, so it is off by
+// default and only runs in an active mode.
+type Headless struct {
+	Enabled        bool `yaml:"enabled"`
+	MaxURLs        int  `yaml:"max_urls"`        // cap URLs rendered
+	TimeoutSeconds int  `yaml:"timeout_seconds"` // per-page render timeout
+}
+
+// Dump bounds the SQL data extractor (used only when checks.sql_dump is on).
+// It defaults to metadata-only extraction; row data is read only when
+// SampleData is true, and never more than MaxRows.
+type Dump struct {
+	MaxTables  int  `yaml:"max_tables"`
+	MaxColumns int  `yaml:"max_columns"`
+	MaxRows    int  `yaml:"max_rows"`
+	SampleData bool `yaml:"sample_data"`
+}
+
+// Takeover configures the subdomain-takeover check.
+type Takeover struct {
+	// ExtraSubdomains are additional hostnames to check for takeover beyond
+	// the crawled origins. Each must fall within scope or it is ignored.
+	ExtraSubdomains []string `yaml:"extra_subdomains"`
 }
 
 // Load reads, parses, applies defaults to, and validates a config file.
@@ -139,6 +239,79 @@ func (c *Config) applyDefaults() {
 	if c.Check.SQLiDelaySeconds > 10 {
 		c.Check.SQLiDelaySeconds = 10
 	}
+	if c.Dump.MaxTables <= 0 {
+		c.Dump.MaxTables = 20
+	}
+	if c.Dump.MaxColumns <= 0 {
+		c.Dump.MaxColumns = 20
+	}
+	if c.Dump.MaxRows <= 0 {
+		c.Dump.MaxRows = 5
+	}
+	if c.Headless.MaxURLs <= 0 {
+		c.Headless.MaxURLs = 25
+	}
+	if c.Headless.TimeoutSeconds <= 0 {
+		c.Headless.TimeoutSeconds = 20
+	}
+	c.applyCheckDefaults()
+}
+
+// anyCheckEnabled reports whether the user turned on at least one detection
+// module. The delay/sample modifiers do not count on their own.
+func (c *Config) anyCheckEnabled() bool {
+	ch := c.Check
+	return ch.XSS || ch.SQLi || ch.AdminPanel || ch.ConfigExposure ||
+		ch.ShellExposure || ch.CMSFingerprint || ch.SubdomainTakeover ||
+		ch.CVEFingerprint || ch.SQLDump || ch.OpenRedirect || ch.PathTraversal ||
+		ch.CommandInjection || ch.SSTI || ch.CORS || ch.SecurityHeaders ||
+		ch.Cookies || ch.CSRF || ch.HeaderInjection || ch.Discovery || ch.SSRF ||
+		ch.GraphQL || ch.CRLF || ch.XXE || ch.XPath || ch.NoSQL || ch.JWT ||
+		ch.Secrets || ch.DirListing
+}
+
+// applyCheckDefaults turns on the full check set when no checks were enabled,
+// so a minimal config (just scope + seeds) runs everything, including the
+// time-based blind SQLi probe, the SQL dumper, and bounded row-data sampling.
+//
+// Row sampling is still bounded by Dump.MaxRows. Reading real row values may
+// be prohibited by a program's data-handling rules; set dump.sample_data to
+// false to prove impact from metadata and schema alone.
+func (c *Config) applyCheckDefaults() {
+	if c.anyCheckEnabled() {
+		return
+	}
+	c.Check.XSS = true
+	c.Check.SQLi = true
+	c.Check.SQLiTimeBased = true
+	c.Check.ConfigExposure = true
+	c.Check.AdminPanel = true
+	c.Check.CMSFingerprint = true
+	c.Check.ShellExposure = true
+	c.Check.SubdomainTakeover = true
+	c.Check.CVEFingerprint = true
+	c.Check.SQLDump = true
+	c.Dump.SampleData = true
+	c.Check.OpenRedirect = true
+	c.Check.PathTraversal = true
+	c.Check.CommandInjection = true
+	c.Check.SSTI = true
+	c.Check.CORS = true
+	c.Check.SecurityHeaders = true
+	c.Check.Cookies = true
+	c.Check.CSRF = true
+	c.Check.HeaderInjection = true
+	c.Check.Discovery = true
+	c.Check.GraphQL = true
+	c.Check.CRLF = true
+	c.Check.XXE = true
+	c.Check.XPath = true
+	c.Check.NoSQL = true
+	c.Check.JWT = true
+	c.Check.Secrets = true
+	c.Check.DirListing = true
+	// Headless (browser) and SSRF (needs a reachable out-of-band callback)
+	// stay opt-in: not enabled here.
 }
 
 // validate enforces the scope guardrails and basic sanity limits.

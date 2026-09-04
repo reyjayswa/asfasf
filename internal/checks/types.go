@@ -43,6 +43,12 @@ type Finding struct {
 	Remediation string    `json:"remediation"` // how to fix it
 	Confidence  string    `json:"confidence"`  // "firm" or "tentative"
 	Timestamp   time.Time `json:"timestamp"`   // when it was found
+
+	// Classification and scoring. Checks may set these directly; the engine's
+	// enrichment step fills any left empty based on the finding Type.
+	CWE   string  `json:"cwe,omitempty"`   // e.g. "CWE-79"
+	OWASP string  `json:"owasp,omitempty"` // e.g. "A03:2021-Injection"
+	Score float64 `json:"score,omitempty"` // indicative 0-10 severity score
 }
 
 // Endpoint is a discovered request target that checks can probe.
@@ -51,6 +57,14 @@ type Endpoint struct {
 	Method string   `json:"method"` // GET or POST
 	Params []string `json:"params"` // parameter names discovered here
 	Source string   `json:"source"` // where it was discovered (link, form, query)
+}
+
+// Detection is a technology identified on the target, optionally with a
+// version. The CVE mapper consumes these to flag known vulnerabilities.
+type Detection struct {
+	Tech    string `json:"tech"`    // e.g. "nginx", "WordPress", "PHP"
+	Version string `json:"version"` // e.g. "1.18.0"; empty if unknown
+	URL     string `json:"url"`     // where it was observed
 }
 
 // Truncate bounds a string to n runes, appending an ellipsis if cut.
