@@ -53,6 +53,14 @@ type Endpoint struct {
 	Source string   `json:"source"` // where it was discovered (link, form, query)
 }
 
+// Detection is a technology identified on the target, optionally with a
+// version. The CVE mapper consumes these to flag known vulnerabilities.
+type Detection struct {
+	Tech    string `json:"tech"`    // e.g. "nginx", "WordPress", "PHP"
+	Version string `json:"version"` // e.g. "1.18.0"; empty if unknown
+	URL     string `json:"url"`     // where it was observed
+}
+
 // Truncate bounds a string to n runes, appending an ellipsis if cut.
 // Checks use it to keep evidence snippets short and safe to render.
 func Truncate(s string, n int) string {
