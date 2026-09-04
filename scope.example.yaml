@@ -1,0 +1,36 @@
+# asfasf-scanner configuration
+#
+# SCOPE IS MANDATORY. The scanner will not send a request to any host that is
+# not matched by scope.in_scope, and out_of_scope always wins. Only list
+# assets you own or are explicitly authorized to test.
+
+# Scan intensity: passive | safe | aggressive
+mode: safe
+
+scope:
+  in_scope:
+    - "example.com"
+    - "*.example.com"
+  out_of_scope:
+    - "admin.example.com"
+
+seeds:
+  - "https://example.com/"
+
+crawl:
+  max_depth: 3
+  max_pages: 200
+  same_host_only: true
+
+http:
+  rate_per_second: 5
+  concurrency: 5
+  timeout_seconds: 15
+  user_agent: "asfasf-scanner/0.1 (authorized security testing)"
+  follow_redirect: false
+
+checks:
+  xss: true
+  sqli: true
+  sqli_time_based: false
+  sqli_delay_seconds: 3

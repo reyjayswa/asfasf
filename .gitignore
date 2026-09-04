@@ -1,0 +1,15 @@
+# Build output
+/scanner
+/bin/
+*.exe
+
+# Local scan artifacts
+*.report.json
+*.report.html
+/scope.yaml
+/out.json
+/out.html
+
+# Go
+*.test
+*.out
