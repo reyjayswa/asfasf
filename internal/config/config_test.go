@@ -42,10 +42,13 @@ seeds: ["https://example.com/"]
 			t.Errorf("expected %s to default ON in a minimal config", name)
 		}
 	}
-	// Row-data sampling is the one thing that must NOT default on: the dumper
-	// extracts metadata/schema by default, but reading real rows is opt-in.
-	if cfg.Dump.SampleData {
-		t.Error("dump.sample_data must not be enabled by default")
+	// Row-data sampling now defaults on for a minimal config, but stays
+	// bounded by MaxRows.
+	if !cfg.Dump.SampleData {
+		t.Error("dump.sample_data should default ON for a minimal config")
+	}
+	if cfg.Dump.MaxRows <= 0 {
+		t.Error("dump.max_rows must have a positive bound")
 	}
 }
 

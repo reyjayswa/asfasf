@@ -97,10 +97,10 @@ dump:
   max_tables: 20
   max_columns: 20
   max_rows: 5
-  # Reading ACTUAL ROW VALUES stays opt-in for data minimization. Leave false
-  # to prove impact via metadata/schema only; set true to read at most
-  # max_rows rows per sampled table.
-  sample_data: false
+  # Reads ACTUAL ROW VALUES (up to max_rows per sampled table). This may be
+  # prohibited by a program's data-handling rules. Set to false to prove impact
+  # from metadata and schema only.
+  sample_data: true
 
 takeover:
   extra_subdomains: []     # optional extra in-scope hosts to check for takeover

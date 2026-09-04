@@ -199,13 +199,12 @@ func (c *Config) anyCheckEnabled() bool {
 }
 
 // applyCheckDefaults turns on the full check set when no checks were enabled,
-// so a minimal config (just scope + seeds) runs everything. This includes the
-// time-based blind SQLi probe and the SQL dumper.
+// so a minimal config (just scope + seeds) runs everything, including the
+// time-based blind SQLi probe, the SQL dumper, and bounded row-data sampling.
 //
-// One deliberate exception: the dumper's row-data sampling (Dump.SampleData)
-// is NOT turned on here. The dumper still proves impact by extracting metadata
-// and schema (table/column names), but reading actual row values stays an
-// explicit opt-in so a default scan respects data-minimization rules.
+// Row sampling is still bounded by Dump.MaxRows. Reading real row values may
+// be prohibited by a program's data-handling rules; set dump.sample_data to
+// false to prove impact from metadata and schema alone.
 func (c *Config) applyCheckDefaults() {
 	if c.anyCheckEnabled() {
 		return
@@ -220,6 +219,7 @@ func (c *Config) applyCheckDefaults() {
 	c.Check.SubdomainTakeover = true
 	c.Check.CVEFingerprint = true
 	c.Check.SQLDump = true
+	c.Dump.SampleData = true
 }
 
 // validate enforces the scope guardrails and basic sanity limits.

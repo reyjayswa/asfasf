@@ -41,8 +41,9 @@ HTML report, and a local web dashboard.
 | **SQL dumper** | exploit | Bounded proof-of-impact extraction on **firmly-confirmed** SQLi: version, user, database, table/column enumeration, and an optional tiny row sample | `sql_dump` |
 
 All of the above are **on by default** (a minimal config with no `checks` block
-runs every check). The one thing that stays off unless you ask for it is the
-dumper's `dump.sample_data`, which reads actual row values.
+runs every check), including the dumper's `dump.sample_data`, which reads a
+bounded sample of actual row values. Set `sample_data: false` if your program
+forbids reading data.
 | **Config exposure** | active | `.env`, `.git/config`, source/config backups, `phpinfo`, SQL dumps — matched by file-specific signatures | `config_exposure` |
 | **Admin panel finder** | active | Common admin/login panels, gated on password fields, panel signatures, or auth challenges | `admin_panel` |
 | **CMS fingerprint** | active | WordPress / Joomla / Drupal / Magento, with version where available | `cms_fingerprint` |
@@ -55,12 +56,14 @@ in-scope origin; injection checks run per discovered parameter.
 ### The SQL dumper and data minimization
 
 The SQL dumper proves the impact of a confirmed injection the way `sqlmap`
-does under an authorized engagement, but it is deliberately **data-minimizing**:
+does under an authorized engagement:
 
-- It defaults to **metadata only** (version, current user, current database,
+- It extracts metadata and schema (version, current user, current database,
   and bounded table/column names).
-- It reads actual **row data only when `dump.sample_data: true`**, and never
-  more than `dump.max_rows` rows, clearly marked as a truncated sample.
+- By default it also reads a **bounded sample of real row values**, never more
+  than `dump.max_rows` per sampled table, clearly marked as a truncated sample.
+  **Reading data is prohibited by many programs** — set `dump.sample_data:
+  false` to prove impact from metadata and schema alone.
 
 Extract no more than you need to demonstrate the finding, and follow the
 program's data-handling rules.
@@ -99,8 +102,8 @@ Requires Go 1.24+.
 **Only `in_scope` and `seeds` are required.** Everything else has safe
 defaults, and if you leave out the `checks` block a useful set of checks turns
 on automatically, including the time-based blind SQLi probe and the SQL dumper.
-The only thing that stays off by default is the dumper reading actual row
-values (`dump.sample_data`); it still proves impact via metadata and schema.
+This includes the dumper reading a bounded sample of real row values
+(`dump.sample_data`); set it to false if your program forbids reading data.
 You do **not** need a proxy: if a target rate-limits you (HTTP 429), lower
 `http.rate_per_second` rather than adding one.
 
@@ -149,7 +152,7 @@ dump:                      # only used when sql_dump is true
   max_tables: 20
   max_columns: 20
   max_rows: 5
-  sample_data: false       # reads actual rows only if true (bounded); off by default
+  sample_data: true        # reads a bounded sample of real rows; set false to forbid
 
 takeover:
   extra_subdomains: []     # extra in-scope hosts to check for takeover
